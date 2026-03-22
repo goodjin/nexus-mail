@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Spark-inspired Design Tokens - Using raw HSL values for Tailwind compatibility */
+    --nexus-primary: 210 100% 50%;
+    --nexus-primary-foreground: 0 0% 100%;
+    
+    --nexus-background: 0 0% 100%;
+    --nexus-foreground: 240 10% 4%;
+    
+    --nexus-sidebar: 240 5% 96%;
+    --nexus-sidebar-foreground: 240 10% 4%;
+    
+    --nexus-muted: 240 5% 65%;
+    --nexus-muted-foreground: 240 5% 96%;
+    
+    --nexus-border: 240 6% 90%;
+    --nexus-input: 240 6% 93%;
+    
+    --nexus-ring: 210 100% 50%;
+    
+    --nexus-radius: 10px;
+  }
+
+  .dark {
+    --nexus-background: 240 10% 4%;
+    --nexus-foreground: 0 0% 98%;
+    
+    --nexus-sidebar: 240 10% 4%;
+    --nexus-sidebar-foreground: 0 0% 98%;
+    
+    --nexus-muted: 240 5% 65%;
+    --nexus-muted-foreground: 240 4% 16%;
+    
+    --nexus-border: 240 4% 16%;
+  }
+}
+
+@layer base {
+  body {
+    @apply bg-nexus-background text-nexus-foreground antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+}

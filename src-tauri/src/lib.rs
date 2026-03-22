@@ -1,0 +1,48 @@
+use tauri::Manager;
+pub mod core;
+pub mod commands;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // 在生产环境中获取 app_data 目录
+            let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
+            if !app_data_dir.exists() {
+                std::fs::create_dir_all(&app_data_dir).expect("Failed to create app data dir");
+            }
+            
+            // 获取或生成数据库加密密钥 (SecurityService)
+            let db_key = core::security::SecurityService::get_or_create_db_key()
+                .expect("Failed to initialize security service / keyring");
+
+            // 初始化数据库 (async)
+            let db = tauri::async_runtime::block_on(async {
+                println!("Connecting to database at: {:?}", app_data_dir.join("nexus.db"));
+                core::database::Database::new(&app_data_dir, &db_key).await
+                    .expect("Failed to initialize database")
+            });
+
+            // 初始化同步引擎
+            let engine = core::sync_engine::SyncEngine::new(db.clone());
+
+            // 注入全局状态，供 Commands 使用
+            app.manage(db);
+            app.manage(engine);
+
+            println!("Nexus Mail Backend Initialized at {:?}", app_data_dir);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::list_accounts,
+            commands::get_folders,
+            commands::get_emails,
+            commands::search_emails,
+            commands::sync_account,
+            commands::send_email,
+            commands::dev_seed_data
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

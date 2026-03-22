@@ -1,0 +1,51 @@
+use anyhow::Result;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FolderInfo {
+    pub id: String,
+    pub name: String,
+    pub remote_id: String,
+    pub unread_count: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EmailSummary {
+    pub uid: String,
+    pub subject: String,
+    pub from: String,
+    pub date: String,
+    pub snippet: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EmailDetails {
+    pub uid: String,
+    pub body_html: Option<String>,
+    pub body_text: Option<String>,
+    pub attachments: Vec<AttachmentInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AttachmentInfo {
+    pub filename: String,
+    pub mime_type: String,
+    pub size: usize,
+}
+
+#[async_trait]
+pub trait MailClient: Send + Sync {
+    async fn connect(&mut self) -> Result<()>;
+    async fn login(&mut self, user: &str, pass: &str) -> Result<()>;
+    async fn get_folders(&mut self) -> Result<Vec<FolderInfo>>;
+    async fn select_folder(&mut self, folder: &str) -> Result<()>;
+    async fn get_emails(&mut self, folder: &str, limit: usize) -> Result<Vec<EmailSummary>>;
+    async fn get_emails_since(&mut self, folder: &str, last_uid: u32) -> Result<Vec<EmailSummary>>;
+    async fn get_email_details(&mut self, folder: &str, uid: &str) -> Result<EmailDetails>;
+}
+
+#[async_trait]
+pub trait MailSender: Send + Sync {
+    async fn send_email(&self, from: &str, to: &str, subject: &str, body: &str) -> Result<()>;
+}

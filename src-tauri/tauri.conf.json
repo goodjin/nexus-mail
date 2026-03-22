@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Nexus Mail",
+  "version": "0.1.0",
+  "identifier": "com.nexus.mail",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Nexus Mail",
+        "width": 1024,
+        "height": 768,
+        "transparent": true
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "publisher": "Nexus Team",
+    "copyright": "Copyright © 2026 Nexus Team",
+    "shortDescription": "Modern Desktop Email Client",
+    "longDescription": "Nexus Mail is a high-performance, cross-platform desktop email client focused on speed, security, and elegant design."
+  }
+}

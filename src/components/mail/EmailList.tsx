@@ -2,6 +2,7 @@ import React from "react";
 import { Email } from "../../hooks/useMailbox";
 import { Card } from "../ui/Card";
 import { cn } from "../../lib/utils";
+import { Search, X } from "lucide-react";
 
 interface EmailListProps {
   emails: Email[];
@@ -9,6 +10,8 @@ interface EmailListProps {
   onEmailSelect: (email: Email) => void;
   folderName: string;
   isLoading: boolean;
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
 }
 
 export const EmailList: React.FC<EmailListProps> = ({
@@ -17,11 +20,34 @@ export const EmailList: React.FC<EmailListProps> = ({
   onEmailSelect,
   folderName,
   isLoading,
+  searchQuery,
+  onSearchChange,
 }) => {
   return (
     <section className="h-full w-80 flex-shrink-0 flex flex-col border-r bg-nexus-background">
-      <header className="h-16 flex items-center px-6 border-b">
-        <h2 className="text-lg font-semibold">{folderName}</h2>
+      <header className="flex flex-col px-6 py-4 border-b gap-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">{folderName}</h2>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-nexus-muted" />
+          <input
+            type="text"
+            data-testid="search-input"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Search messages..."
+            className="w-full bg-nexus-sidebar/50 border-none rounded-nexus pl-9 pr-9 py-2 text-sm focus:ring-1 focus:ring-nexus-primary outline-none"
+          />
+          {searchQuery && (
+            <button 
+              onClick={() => onSearchChange("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-nexus-muted hover:text-nexus-foreground"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
       </header>
       
       <div className="flex-1 overflow-y-auto p-3 space-y-2">

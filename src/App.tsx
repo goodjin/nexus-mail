@@ -24,7 +24,9 @@ const App: React.FC = () => {
     loading: emailsLoading,
     syncing,
     sync,
-    fetchEmailDetails
+    fetchEmailDetails,
+    searchQuery,
+    setSearchQuery
   } = useMailbox(selectedAccount);
 
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
@@ -98,6 +100,8 @@ const App: React.FC = () => {
         onEmailSelect={setSelectedEmail}
         folderName={currentFolder?.name || "Inbox"}
         isLoading={emailsLoading}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
       />
 
       <EmailDetail 

@@ -131,14 +131,25 @@ pub async fn get_emails(
 }
 
 #[tauri::command]
-pub async fn search_emails(db: State<'_, Database>, query: String) -> Result<Vec<EmailSummary>, String> {
+pub async fn search_emails(
+    db: State<'_, Database>, 
+    account_email: String,
+    query: String
+) -> Result<Vec<EmailSummary>, String> {
+    let account = db.get_account_by_email(&account_email).await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())?;
+
     let ids = db.search_emails(&query).await.map_err(|e| e.to_string())?;
     
     let mut results = Vec::new();
     for id in ids {
         if let Ok(email) = sqlx::query_as::<sqlx::Sqlite, (String, String, String, String, String)>("
-            SELECT remote_id, subject, sender, date, snippet FROM emails WHERE id = ?")
+            SELECT remote_id, subject, sender, date, snippet 
+            FROM emails 
+            WHERE id = ? AND account_id = ?")
             .bind(id)
+            .bind(&account.id)
             .fetch_one(&db.pool)
             .await 
         {

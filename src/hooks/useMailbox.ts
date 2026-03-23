@@ -16,6 +16,13 @@ export interface Email {
   snippet: string;
   body_html?: string;
   body_text?: string;
+  attachments?: {
+    id: string;
+    filename: string;
+    size: number;
+    mime_type: string;
+  }[];
+  flags?: string[];
 }
 
 export function useMailbox(accountEmail: string | null) {
@@ -24,6 +31,7 @@ export function useMailbox(accountEmail: string | null) {
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Fetch folders when account changes
   useEffect(() => {
@@ -57,11 +65,19 @@ export function useMailbox(accountEmail: string | null) {
     const fetchEmails = async () => {
       setLoading(true);
       try {
-        const msgs: Email[] = await invoke("get_emails", { 
-          folderId: selectedFolderId, 
-          limit: 50, 
-          offset: 0 
-        });
+        let msgs: Email[];
+        if (searchQuery.trim()) {
+           msgs = await invoke("search_emails", { 
+            accountEmail: accountEmail,
+            query: searchQuery 
+          });
+        } else {
+           msgs = await invoke("get_emails", { 
+            folderId: selectedFolderId, 
+            limit: 50, 
+            offset: 0 
+          });
+        }
         setEmails(msgs);
       } catch (e) {
         console.error("Failed to fetch emails", e);
@@ -70,7 +86,7 @@ export function useMailbox(accountEmail: string | null) {
       }
     };
     fetchEmails();
-  }, [selectedFolderId, accountEmail]);
+  }, [selectedFolderId, accountEmail, searchQuery]);
 
   const sync = async () => {
     if (!accountEmail) return;
@@ -129,5 +145,7 @@ export function useMailbox(accountEmail: string | null) {
     syncing,
     sync,
     fetchEmailDetails,
+    searchQuery,
+    setSearchQuery,
   };
 }

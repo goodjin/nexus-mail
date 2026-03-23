@@ -152,4 +152,12 @@ mod tests {
         let result = SecurityService::get_password(test_email);
         assert!(result.is_err());
     }
+    #[test]
+    fn test_print_real_store() {
+        if let Ok(store) = SecurityService::load_store() {
+            println!("REAL STORE CONTENTS: {:?}", store);
+        } else {
+            println!("REAL STORE LOAD FAILED");
+        }
+    }
 }

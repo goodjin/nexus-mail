@@ -6,6 +6,7 @@ import { EmailList } from "./components/mail/EmailList";
 import { EmailDetail } from "./components/mail/EmailDetail";
 import { Badge } from "./components/ui/Badge";
 import { ComposeModal } from "./components/mail/ComposeModal";
+import { SettingsModal } from "./components/mail/SettingsModal";
 import "./App.css";
 
 const App: React.FC = () => {
@@ -43,6 +44,7 @@ const App: React.FC = () => {
     }
   }, [selectedEmail?.uid]);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   // Auto-hide status messages
@@ -87,6 +89,7 @@ const App: React.FC = () => {
         onSync={handleSync}
         isSyncing={syncing}
         onCompose={() => setIsComposeOpen(true)}
+        onSettings={() => setIsSettingsOpen(true)}
       />
 
       <EmailList 
@@ -108,6 +111,11 @@ const App: React.FC = () => {
           fromAccount={selectedAccount}
         />
       )}
+
+      <SettingsModal 
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
     </div>
   );
 };

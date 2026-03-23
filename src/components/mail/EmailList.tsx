@@ -32,6 +32,7 @@ export const EmailList: React.FC<EmailListProps> = ({
         {emails.map((email) => (
           <Card 
             key={email.uid}
+            data-testid={`email-card-${email.uid}`}
             selected={selectedEmailId === email.uid}
             onClick={() => onEmailSelect(email)}
             className="cursor-pointer p-4 group"

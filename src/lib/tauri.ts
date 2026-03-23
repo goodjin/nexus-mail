@@ -18,13 +18,20 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
         return ["demo@nexus-mail.com"] as any;
       case "get_folders":
         return [
-          { id: "mock-inbox", name: "Inbox", remote_id: "inbox", unread_count: 5 },
+          { id: "mock-inbox", name: "Inbox", remote_id: "inbox", unread_count: 100 },
           { id: "mock-sent", name: "Sent", remote_id: "sent", unread_count: 0 }
         ] as any;
       case "get_emails":
-        return [
-          { uid: "1", subject: "Welcome to Nexus", from: "admin@nexus.local", date: "2026-03-20", snippet: "Enjoy your new modular email client!" }
-        ] as any;
+        return Array.from({ length: 100 }, (_, i) => {
+          const id = 100 - i;
+          return { 
+            uid: String(id), 
+            subject: `Nexus Mail Sample #${id}`, 
+            from: `sender-${id}@mock.com`, 
+            date: "10:00 AM", 
+            snippet: `Mock content for message ${id}` 
+          };
+        }) as any;
       default:
         return {} as any;
     }

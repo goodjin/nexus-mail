@@ -14,12 +14,21 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<File[]>([]);
 
   if (!isOpen) return null;
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      setAttachments([...attachments, ...Array.from(e.target.files)]);
+    }
+  };
+
   const handleSend = async () => {
+    setError(null);
     if (!to || !subject) {
-      alert("Please fill in recipient and subject");
+      setError("Please fill in recipient and subject");
       return;
     }
 
@@ -31,10 +40,9 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
         subject,
         body
       });
-      alert("Email sent successfully!");
       onClose();
     } catch (e) {
-      alert(`Failed to send email: ${e}`);
+      setError(`Failed to send email: ${e}`);
     } finally {
       setSending(false);
     }
@@ -51,17 +59,26 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
         </div>
         
         <div className="flex flex-col p-6 space-y-4">
+          {error && (
+            <div 
+              data-testid="compose-error"
+              className="bg-red-500/10 border border-red-500/20 text-red-500 text-xs p-2 rounded-lg animate-in fade-in slide-in-from-top-2"
+            >
+              {error}
+            </div>
+          )}
+          
           <div className="flex items-center space-x-3 border-b pb-2">
-            <span className="text-nexus-muted w-12">From:</span>
-            <span className="font-medium text-nexus-primary">{fromAccount}</span>
+            <span className="text-nexus-muted w-12 text-sm">From:</span>
+            <span className="font-medium text-nexus-primary text-sm">{fromAccount}</span>
           </div>
           
           <div className="flex items-center space-x-3 border-b pb-2">
-            <label htmlFor="to" className="text-nexus-muted w-12">To:</label>
+            <label htmlFor="to" className="text-nexus-muted w-12 text-sm">To:</label>
             <input 
               id="to"
               type="text" 
-              className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary"
+              className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary text-sm"
               placeholder="recipient@example.com"
               value={to}
               onChange={(e) => setTo(e.target.value)}
@@ -69,11 +86,11 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
           </div>
           
           <div className="flex items-center space-x-3 border-b pb-2">
-            <label htmlFor="subject" className="text-nexus-muted w-12">Subject:</label>
+            <label htmlFor="subject" className="text-nexus-muted w-12 text-sm">Subject:</label>
             <input 
               id="subject"
               type="text" 
-              className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary font-medium"
+              className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary font-medium text-sm"
               placeholder="Enter subject"
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
@@ -81,16 +98,44 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
           </div>
           
           <textarea 
-            className="flex-1 min-h-[300px] bg-transparent border-none focus:outline-none text-nexus-primary resize-none p-2 leading-relaxed"
+            className="flex-1 min-h-[300px] bg-transparent border-none focus:outline-none text-nexus-primary resize-none p-2 leading-relaxed text-sm"
             placeholder="Write your message here..."
             value={body}
             onChange={(e) => setBody(e.target.value)}
           />
+
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-2 border-t">
+              {attachments.map((file, i) => (
+                <div key={i} className="flex items-center gap-2 bg-nexus-sidebar/50 px-2 py-1 rounded text-[10px] text-nexus-muted">
+                  <Paperclip className="w-3 h-3" />
+                  <span>{file.name}</span>
+                  <button 
+                    onClick={() => setAttachments(attachments.filter((_, idx) => idx !== i))}
+                    className="hover:text-red-500"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         
         <div className="p-4 border-t flex items-center justify-between bg-nexus-sidebar/10">
           <div className="flex space-x-2">
-            <Button variant="ghost" size="icon">
+            <input 
+              type="file" 
+              id="attachment-input" 
+              className="hidden" 
+              multiple 
+              onChange={handleFileChange}
+            />
+            <Button 
+                variant="ghost" 
+                size="icon"
+                onClick={() => document.getElementById('attachment-input')?.click()}
+            >
               <Paperclip className="w-5 h-5 text-nexus-muted" />
             </Button>
           </div>

@@ -300,6 +300,15 @@ pub async fn delete_email(
 }
 
 #[tauri::command]
+pub async fn reset_database(db: State<'_, Database>) -> Result<(), String> {
+    sqlx::query("DELETE FROM emails").execute(&db.pool).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM folders").execute(&db.pool).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM accounts").execute(&db.pool).await.map_err(|e| e.to_string())?;
+    sqlx::query("DELETE FROM emails_fts").execute(&db.pool).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn dev_seed_data(db: State<'_, Database>) -> Result<String, String> {
     let email = "demo@nexus-mail.com";
     
@@ -307,8 +316,11 @@ pub async fn dev_seed_data(db: State<'_, Database>) -> Result<String, String> {
     let acct_id = db.upsert_account(email, Some("Mock Testing"), "127.0.0.1", 1993, "127.0.0.1", 1465)
         .await.map_err(|e| e.to_string())?;
 
+    // 存储模拟密码
+    crate::core::security::SecurityService::set_password(email, "pass").map_err(|e| e.to_string())?;
+
     // 注入文件夹
-    let inbox_id = db.upsert_folder(&acct_id, "INBOX", "Inbox", 5)
+    let inbox_id = db.upsert_folder(&acct_id, "INBOX", "Inbox", 100)
         .await.map_err(|e| e.to_string())?;
     db.upsert_folder(&acct_id, "SENT", "Sent", 0)
         .await.map_err(|e| e.to_string())?;

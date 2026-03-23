@@ -31,7 +31,7 @@ impl MailClient for MockMailClient {
     async fn get_folders(&mut self) -> Result<Vec<FolderInfo>> {
         let folders = vec![
             FolderInfo { id: "mock-inbox".into(), name: "收件箱".into(), remote_id: "INBOX".into(), unread_count: 128 },
-            FolderInfo { id: "mock-flagged".into(), name: "重要邮件".into(), remote_id: "FLAGGED".into(), unread_count: 5 },
+            FolderInfo { id: "mock-flagged".into(), name: "重要邮件".into(), remote_id: "FLAGGED".into(), unread_count: 999 },
             FolderInfo { id: "mock-drafts".into(), name: "草稿箱".into(), remote_id: "Drafts".into(), unread_count: 2 },
             FolderInfo { id: "mock-sent".into(), name: "已发送".into(), remote_id: "Sent".into(), unread_count: 0 },
             FolderInfo { id: "mock-junk".into(), name: "垃圾邮件".into(), remote_id: "Junk".into(), unread_count: 42 },

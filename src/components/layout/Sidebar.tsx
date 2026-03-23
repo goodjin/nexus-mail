@@ -15,6 +15,7 @@ interface SidebarProps {
   onSync: () => void;
   isSyncing: boolean;
   onCompose: () => void;
+  onSettings: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -27,12 +28,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSync,
   isSyncing,
   onCompose,
+  onSettings,
 }) => {
   return (
     <aside className="h-full w-64 flex-shrink-0 flex flex-col border-r bg-nexus-sidebar/80 backdrop-blur-md">
       <div className="p-6 flex items-center justify-between">
         <h1 className="text-xl font-bold tracking-tight">Nexus</h1>
-        <Button variant="ghost" size="icon" onClick={() => alert("Settings modal is coming soon!")}>
+        <Button variant="ghost" size="icon" onClick={onSettings}>
           <Settings className="w-5 h-5 text-nexus-muted" />
         </Button>
       </div>
@@ -80,6 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           return (
             <button
               key={folder.id}
+              data-testid={`folder-${folder.name.toLowerCase()}`}
               onClick={() => onFolderSelect(folder.id)}
               className={cn(
                 "w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
@@ -92,6 +95,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span className="flex-1 text-left truncate">{folder.name}</span>
               {folder.unread_count > 0 && (
                 <Badge 
+                  data-testid={`badge-${folder.name.toLowerCase()}`}
                   variant={selectedFolderId === folder.id ? "secondary" : "primary"}
                   className="px-1.5 min-w-[1.25rem] justify-center"
                 >

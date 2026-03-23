@@ -47,12 +47,13 @@ pub fn run() {
             commands::get_emails,
             commands::get_email_details,
             commands::get_attachment,
+            crate::commands::dev_seed_data,
+            crate::commands::reset_database,
             commands::update_email_flag,
             commands::delete_email,
             commands::search_emails,
             commands::sync_account,
-            commands::send_email,
-            commands::dev_seed_data
+            commands::send_email
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

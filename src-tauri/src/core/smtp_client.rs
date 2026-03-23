@@ -32,11 +32,18 @@ impl MailSender for RealSmtpClient {
 
         let creds = Credentials::new(from.to_string(), password);
 
-        // 创建 SMTP 传输
-        let mailer = SmtpTransport::relay(&self.host)?
+        use lettre::transport::smtp::client::Tls;
+
+        let mut mailer_builder = SmtpTransport::relay(&self.host)?
             .port(self.port)
-            .credentials(creds)
-            .build();
+            .credentials(creds);
+
+        // 为本地测试禁用 TLS
+        if self.host == "127.0.0.1" || self.host == "localhost" {
+            mailer_builder = mailer_builder.tls(Tls::None);
+        }
+
+        let mailer = mailer_builder.build();
 
         // 发送邮件 (lettre 的 send 是阻塞的，在 async 环境下需要注意，或者使用 async-transport)
         // 注意：lettre 0.11 支持 tokio1 特性实现异步发送

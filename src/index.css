@@ -22,6 +22,10 @@
     
     --nexus-ring: 210 100% 50%;
     
+    --nexus-selection: 210 100% 50%;
+    --nexus-card: 0 0% 100%;
+    --nexus-accent: 210 100% 50%;
+    
     --nexus-radius: 10px;
   }
 
@@ -36,6 +40,9 @@
     --nexus-muted-foreground: 240 4% 16%;
     
     --nexus-border: 240 4% 16%;
+    --nexus-selection: 210 100% 50%;
+    --nexus-card: 240 10% 6%;
+    --nexus-accent: 210 100% 50%;
   }
 }
 

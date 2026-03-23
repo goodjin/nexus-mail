@@ -22,10 +22,26 @@ const App: React.FC = () => {
     setSelectedFolderId,
     loading: emailsLoading,
     syncing,
-    sync
+    sync,
+    fetchEmailDetails
   } = useMailbox(selectedAccount);
 
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
+  
+  // Fetch full details when email is selected
+  useEffect(() => {
+    if (selectedEmail && !selectedEmail.body_html && !selectedEmail.body_text) {
+      const getDetails = async () => {
+        try {
+          const fullEmail = await fetchEmailDetails(selectedEmail.uid);
+          setSelectedEmail({ ...selectedEmail, ...fullEmail });
+        } catch (e) {
+          console.error("Fetch details failed", e);
+        }
+      };
+      getDetails();
+    }
+  }, [selectedEmail?.uid]);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 

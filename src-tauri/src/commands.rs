@@ -1,7 +1,7 @@
 use tauri::State;
 use crate::core::database::Database;
 use crate::core::sync_engine::SyncEngine;
-use crate::core::traits::{FolderInfo, EmailSummary, MailClient};
+use crate::core::traits::{FolderInfo, EmailSummary, MailClient, MailSender};
 use anyhow::Result;
 
 #[tauri::command]
@@ -28,13 +28,7 @@ pub async fn sync_account(
     let password = crate::core::security::SecurityService::get_password(&email)
         .map_err(|e| format!("Security error: {}", e))?;
 
-    // 3. 选择适配器
-    if email.ends_with("@nexus-mail.com") {
-        // 演示模式直接成功
-        return Ok("Demo account synced".into());
-    }
-
-    // 4. 初始化真实 IMAP 客户端并同步
+    // 3. 初始化真实 IMAP 客户端并同步
     let mut client = crate::core::imap_client::RealImapClient::new(
         &account.imap_host, 
         account.imap_port as u16, 
@@ -53,6 +47,41 @@ pub async fn sync_account(
     }
 
     Ok(format!("Account {} synced successfully", email))
+}
+
+#[tauri::command]
+pub async fn get_email_details(
+    db: State<'_, Database>,
+    account_email: String,
+    folder_id: String,
+    uid: String,
+) -> Result<crate::core::traits::EmailDetails, String> {
+    let account = db.get_account_by_email(&account_email).await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())?;
+        
+    let password = crate::core::security::SecurityService::get_password(&account_email)
+        .map_err(|e| e.to_string())?;
+
+    let folder_row: (String,) = sqlx::query_as("SELECT remote_id FROM folders WHERE id = ?")
+        .bind(&folder_id)
+        .fetch_one(&db.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut client = crate::core::imap_client::RealImapClient::new(
+        &account.imap_host,
+        account.imap_port as u16,
+        &account_email
+    );
+
+    client.connect().await.map_err(|e| e.to_string())?;
+    client.login(&account_email, &password).await.map_err(|e| e.to_string())?;
+
+    let details = client.get_email_details(&folder_row.0, &uid).await
+        .map_err(|e| e.to_string())?;
+
+    Ok(details)
 }
 #[tauri::command]
 pub async fn get_folders(db: State<'_, Database>, account_email: String) -> Result<Vec<FolderInfo>, String> {
@@ -138,34 +167,145 @@ pub async fn send_email(
         .map_err(|e| format!("Database error: {}", e))?
         .ok_or_else(|| format!("Account not found: {}", from))?;
 
-    // 2. 如果是模拟域名，直接模拟成功
-    if from.ends_with("@nexus-mail.com") {
-        return Ok("Demo email sent successfully".into());
-    }
-
-    // 3. 初始化 SMTP 客户端并发送
+    // 2. 初始化 SMTP 客户端并发送
     let client = crate::core::smtp_client::RealSmtpClient::new(
         &account.smtp_host,
         account.smtp_port as u16
     );
 
-    client.send_email(&from, &to, &subject, &body)
+    let password = crate::core::security::SecurityService::get_password(&from)
         .map_err(|e| e.to_string())?;
 
+    // 实现发件逻辑
+    client.send_email(&from, &to, &subject, &body).await
+        .map_err(|e: anyhow::Error| e.to_string())?;
+
     Ok(format!("Email sent to {} successfully", to))
+}
+
+#[tauri::command]
+pub async fn get_attachment(
+    db: State<'_, Database>,
+    account_email: String,
+    folder_id: String,
+    uid: String,
+    attachment_id: String,
+) -> Result<Vec<u8>, String> {
+    let account = db.get_account_by_email(&account_email).await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())?;
+        
+    let password = crate::core::security::SecurityService::get_password(&account_email)
+        .map_err(|e| e.to_string())?;
+
+    let folder_row: (String,) = sqlx::query_as("SELECT remote_id FROM folders WHERE id = ?")
+        .bind(&folder_id)
+        .fetch_one(&db.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut client = crate::core::imap_client::RealImapClient::new(
+        &account.imap_host,
+        account.imap_port as u16,
+        &account_email
+    );
+
+    client.connect().await.map_err(|e| e.to_string())?;
+    client.login(&account_email, &password).await.map_err(|e| e.to_string())?;
+
+    let data = client.get_attachment(&folder_row.0, &uid, &attachment_id).await
+        .map_err(|e| e.to_string())?;
+
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn update_email_flag(
+    db: State<'_, Database>,
+    account_email: String,
+    folder_id: String,
+    uid: String,
+    flag: String,
+    value: bool,
+) -> Result<(), String> {
+    let account = db.get_account_by_email(&account_email).await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())?;
+        
+    let password = crate::core::security::SecurityService::get_password(&account_email)
+        .map_err(|e| e.to_string())?;
+
+    let folder_row: (String,) = sqlx::query_as("SELECT remote_id FROM folders WHERE id = ?")
+        .bind(&folder_id)
+        .fetch_one(&db.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut client = crate::core::imap_client::RealImapClient::new(
+        &account.imap_host,
+        account.imap_port as u16,
+        &account_email
+    );
+
+    client.connect().await.map_err(|e| e.to_string())?;
+    client.login(&account_email, &password).await.map_err(|e| e.to_string())?;
+
+    client.set_flag(&folder_row.0, &uid, &flag, value).await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_email(
+    db: State<'_, Database>,
+    account_email: String,
+    folder_id: String,
+    uid: String,
+) -> Result<(), String> {
+    let account = db.get_account_by_email(&account_email).await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())?;
+        
+    let password = crate::core::security::SecurityService::get_password(&account_email)
+        .map_err(|e| e.to_string())?;
+
+    let folder_row: (String,) = sqlx::query_as("SELECT remote_id FROM folders WHERE id = ?")
+        .bind(&folder_id)
+        .fetch_one(&db.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut client = crate::core::imap_client::RealImapClient::new(
+        &account.imap_host,
+        account.imap_port as u16,
+        &account_email
+    );
+
+    client.connect().await.map_err(|e| e.to_string())?;
+    client.login(&account_email, &password).await.map_err(|e| e.to_string())?;
+
+    client.delete_email(&folder_row.0, &uid).await
+        .map_err(|e| e.to_string())?;
+
+    // 从本地 DB 删除
+    sqlx::query("DELETE FROM emails WHERE folder_id = ? AND uid = ?")
+        .bind(&folder_id)
+        .bind(&uid)
+        .execute(&db.pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn dev_seed_data(db: State<'_, Database>) -> Result<String, String> {
     let email = "demo@nexus-mail.com";
     
-    // 注入模拟账户
-    let acct_id = db.upsert_account(email, Some("Demo User"), "imap.demo.com", 993, "smtp.demo.com", 465)
+    // 注入模拟账户 (指向本地 Mock 服务器)
+    let acct_id = db.upsert_account(email, Some("Mock Testing"), "127.0.0.1", 1993, "127.0.0.1", 1465)
         .await.map_err(|e| e.to_string())?;
-
-    // 设置模拟密码
-    crate::core::security::SecurityService::set_password(email, "demo-password")
-        .map_err(|e| e.to_string())?;
 
     // 注入文件夹
     let inbox_id = db.upsert_folder(&acct_id, "INBOX", "Inbox", 5)
@@ -177,32 +317,15 @@ pub async fn dev_seed_data(db: State<'_, Database>) -> Result<String, String> {
     db.upsert_folder(&acct_id, "DRAFTS", "Drafts", 2)
         .await.map_err(|e| e.to_string())?;
 
-    // 注入模拟邮件
-    let emails = vec![
-        EmailSummary {
-            uid: "1001".into(),
-            from: "GitHub <noreply@github.com>".into(),
-            subject: "[GitHub] Your personal access token is about to expire".into(),
-            date: "10:45 AM".into(),
-            snippet: "The personal access token (NexusKey) you created is set to expire in 7 days. Please renew it to avoid service interruption.".into(),
-        },
-        EmailSummary {
-            uid: "1002".into(),
-            from: "Figma <updates@figma.com>".into(),
-            subject: "The new UI3 is now available for your team".into(),
-            date: "Yesterday".into(),
-            snippet: "Experience a cleaner, more focused Figma. We've redesigned the interface to keep your canvas at the center of your work.".into(),
-        },
-        EmailSummary {
-            uid: "1003".into(),
-            from: "Vercel <newsletter@vercel.com>".into(),
-            subject: "Next.js 15: The New Standard for Web Apps".into(),
-            date: "Mar 18".into(),
-            snippet: "Introducing Turbopack for production, improved caching semantics, and the all-new PPR (Partial Prerendering) feature.".into(),
-        }
-    ];
-
-    for email in emails {
+    // 注入 100 封模拟邮件
+    for i in 1..=100 {
+        let email = EmailSummary {
+            uid: (1000 + i).to_string(),
+            from: format!("sender-{}@mock.com", i),
+            subject: format!("Nexus Mail Sample #{}", i),
+            date: format!("{:02}:{:02} AM", 9 + (i/60), i % 60),
+            snippet: format!("This is mock email content for message number {}. It is used to verify the 100-email load simulation.", i),
+        };
         db.upsert_email(&inbox_id, &email).await.map_err(|e| e.to_string())?;
     }
 

@@ -6,7 +6,7 @@ export function useAccounts() {
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const fetchAccounts = async (forceSeed = false) => {
+  const fetchAccounts = async () => {
     setLoading(true);
     try {
       let accts: string[] = await invoke("list_accounts");

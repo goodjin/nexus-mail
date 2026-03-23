@@ -29,6 +29,7 @@ pub struct EmailDetails {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AttachmentInfo {
+    pub id: String,
     pub filename: String,
     pub mime_type: String,
     pub size: usize,
@@ -43,6 +44,9 @@ pub trait MailClient: Send + Sync {
     async fn get_emails(&mut self, folder: &str, limit: usize) -> Result<Vec<EmailSummary>>;
     async fn get_emails_since(&mut self, folder: &str, last_uid: u32) -> Result<Vec<EmailSummary>>;
     async fn get_email_details(&mut self, folder: &str, uid: &str) -> Result<EmailDetails>;
+    async fn get_attachment(&mut self, folder: &str, uid: &str, attachment_id: &str) -> Result<Vec<u8>>;
+    async fn set_flag(&mut self, folder: &str, uid: &str, flag: &str, value: bool) -> Result<()>;
+    async fn delete_email(&mut self, folder: &str, uid: &str) -> Result<()>;
 }
 
 #[async_trait]

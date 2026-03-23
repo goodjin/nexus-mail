@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use std::net::TcpStream;
 use tokio::sync::Mutex;
 use std::sync::Arc;
+use mailparse::MailHeaderMap;
+use md5;
 use super::traits::{MailClient, FolderInfo, EmailSummary, EmailDetails};
 
 pub struct RealImapClient {
@@ -155,8 +157,136 @@ impl MailClient for RealImapClient {
         Ok(summaries)
     }
 
-    async fn get_email_details(&mut self, _folder: &str, _uid: &str) -> Result<EmailDetails> {
-        Err(anyhow::anyhow!("Not implemented yet"))
+    async fn get_email_details(&mut self, folder: &str, uid: &str) -> Result<EmailDetails> {
+        self.select_folder(folder).await?;
+        let mut state = self.inner.lock().await;
+
+        let raw_body = match &mut *state {
+            ImapState::AuthenticatedPlain(s) => {
+                let fetch = s.uid_fetch(uid, "BODY[]")?;
+                fetch.iter().next().and_then(|i| i.body()).ok_or_else(|| anyhow::anyhow!("Body not found"))?.to_vec()
+            }
+            ImapState::AuthenticatedSsl(s) => {
+                let fetch = s.uid_fetch(uid, "BODY[]")?;
+                fetch.iter().next().and_then(|i| i.body()).ok_or_else(|| anyhow::anyhow!("Body not found"))?.to_vec()
+            }
+            _ => return Err(anyhow::anyhow!("Not authenticated")),
+        };
+
+        let parsed = mailparse::parse_mail(&raw_body).context("Failed to parse RFC822 body")?;
+        
+        let mut body_html = None;
+        let mut body_text = None;
+        let mut attachments = Vec::new();
+
+        // 递归遍历 MIME 树
+        fn walk_parts(
+            part: &mailparse::ParsedMail, 
+            html: &mut Option<String>, 
+            text: &mut Option<String>,
+            attachments: &mut Vec<super::traits::AttachmentInfo>
+        ) {
+            let content_type = part.get_headers().get_first_value("Content-Type").unwrap_or_default().to_lowercase();
+            let disposition = part.get_headers().get_first_value("Content-Disposition").unwrap_or_default().to_lowercase();
+            let filename = part.get_content_disposition().params.get("filename").cloned().unwrap_or_default();
+
+            if disposition.contains("attachment") || !filename.is_empty() {
+                let body_raw = part.get_body_raw().unwrap_or_default();
+                let id = format!("{:x}", md5::compute(&body_raw));
+                attachments.push(super::traits::AttachmentInfo {
+                    id,
+                    filename: if filename.is_empty() { "unnamed".to_string() } else { filename },
+                    mime_type: content_type,
+                    size: body_raw.len(),
+                });
+            } else if content_type.contains("text/html") {
+                if html.is_none() {
+                    *html = part.get_body().ok();
+                }
+            } else if content_type.contains("text/plain") {
+                if text.is_none() {
+                    *text = part.get_body().ok();
+                }
+            }
+
+            for subpart in &part.subparts {
+                walk_parts(subpart, html, text, attachments);
+            }
+        }
+
+        walk_parts(&parsed, &mut body_html, &mut body_text, &mut attachments);
+
+        Ok(EmailDetails {
+            uid: uid.into(),
+            body_html,
+            body_text,
+            attachments,
+        })
+    }
+
+    async fn get_attachment(&mut self, folder: &str, uid: &str, attachment_id: &str) -> Result<Vec<u8>> {
+        self.select_folder(folder).await?;
+        let mut state = self.inner.lock().await;
+
+        let raw_body = match &mut *state {
+            ImapState::AuthenticatedPlain(s) => {
+                let fetch = s.uid_fetch(uid, "BODY[]")?;
+                let item = fetch.iter().next().ok_or_else(|| anyhow::anyhow!("Email not found"))?;
+                item.body().ok_or_else(|| anyhow::anyhow!("Empty body"))?.to_vec()
+            }
+            ImapState::AuthenticatedSsl(s) => {
+                let fetch = s.uid_fetch(uid, "BODY[]")?;
+                let item = fetch.iter().next().ok_or_else(|| anyhow::anyhow!("Email not found"))?;
+                item.body().ok_or_else(|| anyhow::anyhow!("Empty body"))?.to_vec()
+            }
+            _ => return Err(anyhow::anyhow!("Not connected")),
+        };
+
+        let parsed = mailparse::parse_mail(&raw_body)?;
+        
+        self.find_attachment_recursive(&parsed, attachment_id)
+            .ok_or_else(|| anyhow::anyhow!("Attachment not found"))
+    }
+
+    async fn set_flag(&mut self, folder: &str, uid: &str, flag: &str, value: bool) -> Result<()> {
+        self.select_folder(folder).await?;
+        let mut state = self.inner.lock().await;
+        let action = if value { "+FLAGS" } else { "-FLAGS" };
+        match &mut *state {
+            ImapState::AuthenticatedPlain(s) => { s.uid_store(uid, format!("{} ({})", action, flag))?; }
+            ImapState::AuthenticatedSsl(s) => { s.uid_store(uid, format!("{} ({})", action, flag))?; }
+            _ => return Err(anyhow::anyhow!("Not connected")),
+        }
+        Ok(())
+    }
+
+    async fn delete_email(&mut self, folder: &str, uid: &str) -> Result<()> {
+        self.set_flag(folder, uid, "\\Deleted", true).await?;
+        let mut state = self.inner.lock().await;
+        match &mut *state {
+            ImapState::AuthenticatedPlain(s) => { s.expunge()?; }
+            ImapState::AuthenticatedSsl(s) => { s.expunge()?; }
+            _ => return Err(anyhow::anyhow!("Not connected")),
+        }
+        Ok(())
+    }
+}
+
+impl RealImapClient {
+    fn find_attachment_recursive(&self, part: &mailparse::ParsedMail, target_id: &str) -> Option<Vec<u8>> {
+        let body_raw = part.get_body_raw().unwrap_or_default();
+        let current_id = format!("{:x}", md5::compute(&body_raw));
+
+        if current_id == target_id {
+            return Some(body_raw.to_vec());
+        }
+
+        for subpart in &part.subparts {
+            if let Some(data) = self.find_attachment_recursive(subpart, target_id) {
+                return Some(data);
+            }
+        }
+        None
     }
 }
 

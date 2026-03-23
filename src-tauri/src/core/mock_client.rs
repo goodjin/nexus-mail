@@ -90,6 +90,18 @@ impl MailClient for MockMailClient {
             attachments: vec![],
         })
     }
+
+    async fn get_attachment(&mut self, _folder: &str, _uid: &str, _attachment_id: &str) -> Result<Vec<u8>> {
+        Ok(vec![0; 100])
+    }
+
+    async fn set_flag(&mut self, _folder: &str, _uid: &str, _flag: &str, _value: bool) -> Result<()> {
+        todo!()
+    }
+
+    async fn delete_email(&mut self, _folder: &str, _uid: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub struct MockMailSender;

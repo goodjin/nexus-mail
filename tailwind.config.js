@@ -19,6 +19,9 @@ export default {
           border: "hsl(var(--nexus-border) / <alpha-value>)",
           input: "hsl(var(--nexus-input) / <alpha-value>)",
           ring: "hsl(var(--nexus-ring) / <alpha-value>)",
+          selection: "hsl(var(--nexus-selection) / <alpha-value>)",
+          card: "hsl(var(--nexus-card) / <alpha-value>)",
+          accent: "hsl(var(--nexus-accent) / <alpha-value>)",
         }
       },
       borderRadius: {

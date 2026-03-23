@@ -111,7 +111,7 @@ mod tests {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         let db = Database { pool };
         db.init_tables().await.unwrap();
-        let engine = SyncEngine::new(db);
+        let engine = SyncEngine::new(db.clone());
         
         let acct_id = db.upsert_account("test@me.com", None, "host", 993, "host", 465).await.unwrap();
         let folder_id = db.upsert_folder(&acct_id, "INBOX", "Inbox", 0).await.unwrap();
@@ -127,6 +127,9 @@ mod tests {
             async fn get_emails(&mut self, _: &str, _: usize) -> Result<Vec<crate::core::traits::EmailSummary>> { Ok(vec![]) }
             async fn get_emails_since(&mut self, _: &str, _: u32) -> Result<Vec<crate::core::traits::EmailSummary>> { Ok(vec![]) }
             async fn get_email_details(&mut self, _: &str, _: &str) -> Result<crate::core::traits::EmailDetails> { todo!() }
+            async fn get_attachment(&mut self, _: &str, _: &str, _: &str) -> Result<Vec<u8>> { todo!() }
+            async fn set_flag(&mut self, _: &str, _: &str, _: &str, _: bool) -> Result<()> { todo!() }
+            async fn delete_email(&mut self, _: &str, _: &str) -> Result<()> { todo!() }
         }
 
         let mut client = EmptyClient;

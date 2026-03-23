@@ -4,6 +4,10 @@ pub mod commands;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if std::env::var("NEXUS_DEV_MOCK").is_ok() {
+        crate::core::test_servers::MockServers::start_all();
+    }
+    
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -31,6 +35,9 @@ pub fn run() {
             app.manage(db);
             app.manage(engine);
 
+            // 启动本地 Mock 测试服务器
+            core::test_servers::MockServers::start_all();
+
             println!("Nexus Mail Backend Initialized at {:?}", app_data_dir);
             Ok(())
         })
@@ -38,6 +45,10 @@ pub fn run() {
             commands::list_accounts,
             commands::get_folders,
             commands::get_emails,
+            commands::get_email_details,
+            commands::get_attachment,
+            commands::update_email_flag,
+            commands::delete_email,
             commands::search_emails,
             commands::sync_account,
             commands::send_email,

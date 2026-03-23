@@ -97,6 +97,29 @@ export function useMailbox(accountEmail: string | null) {
     }
   };
 
+  const fetchEmailDetails = async (emailUid: string): Promise<Email> => {
+    if (!accountEmail || !selectedFolderId) throw new Error("Missing context");
+    try {
+      const details: any = await invoke("get_email_details", {
+        accountEmail,
+        folderId: selectedFolderId,
+        uid: emailUid,
+      });
+      return {
+        uid: emailUid,
+        subject: "", // Original summary already has this
+        from: "",
+        date: "",
+        snippet: "",
+        body_html: details.body_html,
+        body_text: details.body_text,
+      };
+    } catch (e) {
+      console.error("Failed to fetch email details", e);
+      throw e;
+    }
+  };
+
   return {
     folders,
     emails,
@@ -105,5 +128,6 @@ export function useMailbox(accountEmail: string | null) {
     loading,
     syncing,
     sync,
+    fetchEmailDetails,
   };
 }

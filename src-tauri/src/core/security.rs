@@ -1,23 +1,23 @@
 use aes_gcm::{
     aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce
+    Aes256Gcm, Nonce,
 };
+use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use hmac::Hmac;
 use pbkdf2::pbkdf2;
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use hmac::Hmac;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{PathBuf};
-use anyhow::{Result, Context, anyhow};
-use serde::{Serialize, Deserialize};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use std::path::PathBuf;
 
 pub struct SecurityService;
 
 #[derive(Serialize, Deserialize)]
 struct EncryptedStore {
-    nonce: String, // Base64
+    nonce: String,      // Base64
     ciphertext: String, // Base64
 }
 
@@ -27,12 +27,12 @@ impl SecurityService {
 
     /// 获取存储文件的路径
     fn get_store_path() -> Result<PathBuf> {
-        let home = dirs::home_dir().ok_or_else(|| anyhow!("Failed to get home dir"))?;
-        let config_dir = home.join(".nexus-mail");
-        if !config_dir.exists() {
-            fs::create_dir_all(&config_dir)?;
+        let data_dir = dirs::data_dir().ok_or_else(|| anyhow!("Failed to get data dir"))?;
+        let app_dir = data_dir.join("com.nexus.mail");
+        if !app_dir.exists() {
+            fs::create_dir_all(&app_dir)?;
         }
-        Ok(config_dir.join(Self::STORE_FILENAME))
+        Ok(app_dir.join(Self::STORE_FILENAME))
     }
 
     /// 派生主密钥 (Master Key)
@@ -40,12 +40,7 @@ impl SecurityService {
         let username = whoami::username()?;
         let mut key = [0u8; 32];
         // 使用 Hmac<Sha256> 作为 PRF
-        let _ = pbkdf2::<Hmac<Sha256>>(
-            username.as_bytes(),
-            Self::SALT,
-            100_000,
-            &mut key
-        );
+        let _ = pbkdf2::<Hmac<Sha256>>(username.as_bytes(), Self::SALT, 100_000, &mut key);
         Ok(key)
     }
 
@@ -55,19 +50,20 @@ impl SecurityService {
         let master_key = Self::derive_master_key()?;
         let cipher = Aes256Gcm::new_from_slice(&master_key)
             .map_err(|e| anyhow!("Cipher init error: {}", e))?;
-        
+
         let mut nonce_bytes = [0u8; 12];
         rand::rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
-        
-        let ciphertext = cipher.encrypt(nonce, json.as_ref())
+
+        let ciphertext = cipher
+            .encrypt(nonce, json.as_ref())
             .map_err(|e| anyhow!("Encryption error: {}", e))?;
-        
+
         let encrypted_data = EncryptedStore {
             nonce: STANDARD.encode(nonce_bytes),
             ciphertext: STANDARD.encode(ciphertext),
         };
-        
+
         let path = Self::get_store_path()?;
         fs::write(path, serde_json::to_string(&encrypted_data)?)?;
         Ok(())
@@ -79,21 +75,22 @@ impl SecurityService {
         if !path.exists() {
             return Ok(HashMap::new());
         }
-        
+
         let data = fs::read_to_string(path)?;
         let encrypted: EncryptedStore = serde_json::from_str(&data)?;
-        
+
         let nonce_bytes = STANDARD.decode(encrypted.nonce)?;
         let ciphertext = STANDARD.decode(encrypted.ciphertext)?;
         let master_key = Self::derive_master_key()?;
-        
+
         let cipher = Aes256Gcm::new_from_slice(&master_key)
             .map_err(|e| anyhow!("Cipher init error: {}", e))?;
         let nonce = Nonce::from_slice(&nonce_bytes);
-        
-        let decrypted = cipher.decrypt(nonce, ciphertext.as_ref())
+
+        let decrypted = cipher
+            .decrypt(nonce, ciphertext.as_ref())
             .map_err(|e| anyhow!("Decryption error: {}. Master key mismatch?", e))?;
-        
+
         let store: HashMap<String, String> = serde_json::from_slice(&decrypted)?;
         Ok(store)
     }
@@ -106,7 +103,8 @@ impl SecurityService {
 
     pub fn get_password(email: &str) -> Result<String> {
         let store = Self::load_store()?;
-        store.get(email)
+        store
+            .get(email)
             .cloned()
             .ok_or_else(|| anyhow!("Password not found for {}", email))
     }
@@ -153,7 +151,16 @@ mod tests {
         assert!(result.is_err());
     }
     #[test]
+    fn test_password_not_found() {
+        let test_email = "non-existent@nexus-mail.local";
+        let result = SecurityService::get_password(test_email);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Password not found"));
+    }
+
+    #[test]
     fn test_print_real_store() {
+        println!("STORE PATH: {:?}", SecurityService::get_store_path().unwrap());
         if let Ok(store) = SecurityService::load_store() {
             println!("REAL STORE CONTENTS: {:?}", store);
         } else {

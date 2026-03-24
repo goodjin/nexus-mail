@@ -6,7 +6,7 @@ import { EmailList } from "./components/mail/EmailList";
 import { EmailDetail } from "./components/mail/EmailDetail";
 import { Badge } from "./components/ui/Badge";
 import { ComposeModal } from "./components/mail/ComposeModal";
-import { SettingsModal } from "./components/mail/SettingsModal";
+import { SettingsModal } from "./components/settings/SettingsModal";
 import "./App.css";
 
 const App: React.FC = () => {
@@ -25,6 +25,10 @@ const App: React.FC = () => {
     syncing,
     sync,
     fetchEmailDetails,
+    deleteEmails,
+    toggleFlag,
+    markAsRead,
+    loadMore,
     searchQuery,
     setSearchQuery
   } = useMailbox(selectedAccount);
@@ -82,7 +86,7 @@ const App: React.FC = () => {
 
       {/* Layers */}
       <Sidebar 
-        accounts={accounts}
+        accounts={accounts.map(a => a.email)}
         selectedAccount={selectedAccount}
         onAccountChange={setSelectedAccount}
         folders={folders}
@@ -102,10 +106,41 @@ const App: React.FC = () => {
         isLoading={emailsLoading}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
+        onDeleteEmails={async (uids) => {
+            await deleteEmails(uids);
+            if (selectedEmail && uids.includes(selectedEmail.uid)) {
+                setSelectedEmail(null);
+            }
+        }}
+        onLoadMore={loadMore}
       />
 
       <EmailDetail 
         email={selectedEmail}
+        onDelete={async (uid: string) => {
+            await deleteEmails([uid]);
+            setSelectedEmail(null);
+        }}
+        onToggleFlag={async (uid: string, flags: string[]) => {
+            await toggleFlag(uid, flags);
+            if (selectedEmail?.uid === uid) {
+                const isFlagged = flags.includes("\\Flagged");
+                const newFlags = isFlagged 
+                    ? flags.filter(f => f !== "\\Flagged")
+                    : [...flags, "\\Flagged"];
+                setSelectedEmail({ ...selectedEmail, flags: newFlags });
+            }
+        }}
+        onMarkAsRead={async (uid: string, seen: boolean) => {
+            await markAsRead(uid, seen);
+            if (selectedEmail?.uid === uid) {
+                const currentFlags = selectedEmail.flags || [];
+                const newFlags = seen 
+                    ? (currentFlags.includes("\\Seen") ? (currentFlags as string[]) : [...(currentFlags as string[]), "\\Seen"])
+                    : (currentFlags as string[]).filter(f => f !== "\\Seen");
+                setSelectedEmail({ ...selectedEmail, flags: newFlags });
+            }
+        }}
       />
 
       {selectedAccount && (

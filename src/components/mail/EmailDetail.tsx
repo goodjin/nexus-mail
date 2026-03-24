@@ -4,12 +4,46 @@ import DOMPurify from "dompurify";
 import { Trash2, Archive, MailOpen, Flag, Paperclip, Download } from "lucide-react";
 import { Button } from "../ui/Button";
 import { invoke } from "../../lib/tauri";
+import { cn } from "../../lib/utils";
+import { useSettings } from "../../hooks/useSettings";
 
 interface EmailDetailProps {
   email: Email | null;
+  onDelete: (uid: string) => Promise<void>;
+  onToggleFlag: (uid: string, flags: string[]) => Promise<void>;
+  onMarkAsRead: (uid: string, seen: boolean) => Promise<void>;
 }
 
-export const EmailDetail: React.FC<EmailDetailProps> = ({ email }) => {
+export const EmailDetail: React.FC<EmailDetailProps> = ({ 
+  email, 
+  onDelete, 
+  onToggleFlag, 
+  onMarkAsRead 
+}) => {
+  const { settings } = useSettings();
+
+  // Auto-download attachments if setting is enabled
+  React.useEffect(() => {
+    if (settings.auto_download_attachments && email?.attachments && email.attachments.length > 0) {
+      console.log(`[AutoDownload] Started for email ${email.uid}`);
+      email.attachments.forEach(async (att) => {
+        try {
+          // In a real app, we might download to a local cache folder.
+          // Here we just trigger the command to 'warm' the cache (or just for demo).
+          await invoke("get_attachment", {
+            accountEmail: email.from,
+            folderId: "INBOX", // Placeholder, should ideally be dynamic
+            uid: email.uid,
+            attachmentId: att.id
+          });
+          console.log(`[AutoDownload] Success: ${att.filename}`);
+        } catch (e) {
+          console.error(`[AutoDownload] Failed for ${att.filename}:`, e);
+        }
+      });
+    }
+  }, [email?.uid, settings.auto_download_attachments]);
+
   if (!email) {
     return (
       <main className="h-full flex-1 flex items-center justify-center bg-nexus-background">
@@ -19,18 +53,36 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({ email }) => {
   }
 
   const sanitizedBody = DOMPurify.sanitize(email.body_html || email.snippet);
+  const isFlagged = email.flags?.includes("\\Flagged");
+  const isSeen = email.flags?.includes("\\Seen");
 
   return (
-    <main className="h-full flex-1 flex flex-col bg-nexus-background overflow-hidden">
+    <main className="h-full flex-1 flex flex-col bg-nexus-background overflow-hidden text-nexus-foreground">
       <header className="p-8 border-b">
         <div className="flex justify-between items-start mb-6">
           <h1 className="text-2xl font-bold flex-1 mr-4">{email.subject}</h1>
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" title="Mark Unread" data-testid="action-unread">
-              <MailOpen className="w-4 h-4 text-nexus-muted" />
+            <Button 
+                variant="ghost" 
+                size="icon" 
+                title={isSeen ? "Mark Unread" : "Mark Read"} 
+                data-testid="action-unread"
+                onClick={() => onMarkAsRead(email.uid, !isSeen)}
+            >
+              {isSeen ? (
+                <MailOpen className="w-4 h-4 text-nexus-muted" />
+              ) : (
+                <div className="w-4 h-4 rounded-full border-2 border-nexus-accent" />
+              )}
             </Button>
-            <Button variant="ghost" size="icon" title="Flag" data-testid="action-flag">
-              <Flag className="w-4 h-4 text-nexus-muted" />
+            <Button 
+                variant="ghost" 
+                size="icon" 
+                title="Flag" 
+                data-testid="action-flag"
+                onClick={() => onToggleFlag(email.uid, email.flags || [])}
+            >
+              <Flag className={cn("w-4 h-4", isFlagged ? "fill-nexus-accent text-nexus-accent" : "text-nexus-muted")} />
             </Button>
             <Button variant="ghost" size="icon" title="Archive" data-testid="action-archive">
               <Archive className="w-4 h-4 text-nexus-muted" />
@@ -41,10 +93,9 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({ email }) => {
                 title="Delete"
                 data-testid="action-delete"
                 className="hover:text-red-500 hover:bg-red-500/10"
-                onClick={async () => {
+                onClick={() => {
                     if (confirm("Move this email to trash?")) {
-                        await invoke("delete_email", { accountEmail: email.from, folderId: "INBOX", uid: email.uid });
-                        window.location.reload(); // Simple refresh for now
+                        onDelete(email.uid);
                     }
                 }}
             >
@@ -79,6 +130,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({ email }) => {
               {email.attachments.map((att: any) => (
                 <div 
                   key={att.id}
+                  data-testid={`attachment-item-${att.id}`}
                   className="flex items-center justify-between p-3 rounded-nexus bg-nexus-sidebar/30 border border-nexus-border group"
                 >
                   <div className="flex flex-col min-w-0">
@@ -90,6 +142,34 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({ email }) => {
                     size="icon" 
                     className="opacity-0 group-hover:opacity-100"
                     data-testid={`attachment-download-${att.id}`}
+                    onClick={async () => {
+                        try {
+                            const { save } = await import("@tauri-apps/plugin-dialog");
+                            const { writeFile } = await import("@tauri-apps/plugin-fs");
+                            
+                            const filePath = await save({
+                                defaultPath: att.filename,
+                                filters: [{ 
+                                    name: "Files", 
+                                    extensions: [att.filename.split('.').pop() || '*'] 
+                                }]
+                            });
+
+                            if (filePath) {
+                                const data = await invoke<number[]>("get_attachment", {
+                                    accountEmail: email.from,
+                                    folderId: "INBOX", 
+                                    uid: email.uid,
+                                    attachmentId: att.id
+                                });
+                                await writeFile(filePath, new Uint8Array(data));
+                                alert("File saved successfully!");
+                            }
+                        } catch (e) {
+                            console.error("Failed to save attachment", e);
+                            alert("Failed to save attachment");
+                        }
+                    }}
                   >
                     <Download className="w-4 h-4" />
                   </Button>

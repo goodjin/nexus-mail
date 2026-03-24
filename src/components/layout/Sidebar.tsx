@@ -2,7 +2,7 @@ import React from "react";
 import { Folder } from "../../hooks/useMailbox";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
-import { RefreshCw, Mail, Inbox, Archive, Trash2, Settings } from "lucide-react";
+import { RefreshCw, Mail, Inbox, Archive, Trash2, Settings, FileText, AlertOctagon } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 interface SidebarProps {
@@ -58,6 +58,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           className="w-full justify-center gap-2 bg-nexus-accent hover:bg-nexus-accent/90 text-white shadow-lg shadow-nexus-accent/20" 
           onClick={onCompose}
           variant="primary"
+          data-testid="compose-button"
         >
           <Mail className="w-4 h-4" />
           Compose
@@ -114,7 +115,9 @@ function getFolderIcon(name: string) {
   const n = name.toLowerCase();
   if (n.includes("inbox")) return Inbox;
   if (n.includes("sent")) return Mail;
+  if (n.includes("draft")) return FileText;
+  if (n.includes("trash") || n.includes("deleted")) return Trash2;
+  if (n.includes("spam") || n.includes("junk")) return AlertOctagon;
   if (n.includes("archive")) return Archive;
-  if (n.includes("trash")) return Trash2;
   return Mail;
 }

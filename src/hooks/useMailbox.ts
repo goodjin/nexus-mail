@@ -129,10 +129,96 @@ export function useMailbox(accountEmail: string | null) {
         snippet: "",
         body_html: details.body_html,
         body_text: details.body_text,
+        attachments: details.attachments,
+        flags: details.flags,
       };
     } catch (e) {
       console.error("Failed to fetch email details", e);
       throw e;
+    }
+  };
+
+  const deleteEmails = async (uids: string[]) => {
+    // Optimistic update
+    const previousEmails = [...emails];
+    setEmails(emails.filter(e => !uids.includes(e.uid)));
+    
+    try {
+      await Promise.all(uids.map(uid => invoke("delete_email", { 
+        accountEmail, 
+        folderId: selectedFolderId, 
+        uid 
+      })));
+    } catch (e) {
+      console.error("Bulk delete failed", e);
+      setEmails(previousEmails); // Rollback
+      throw e;
+    }
+  };
+
+  const toggleFlag = async (uid: string, currentFlags: string[]) => {
+    const isFlagged = currentFlags.includes("\\Flagged");
+    const newFlags = isFlagged 
+      ? currentFlags.filter(f => f !== "\\Flagged")
+      : [...currentFlags, "\\Flagged"];
+      
+    // Optimistic update
+    setEmails(emails.map(e => e.uid === uid ? { ...e, flags: newFlags } : e));
+    
+    try {
+      await invoke("set_flag", {
+        accountEmail,
+        folderId: selectedFolderId,
+        uid,
+        flag: "\\Flagged",
+        value: !isFlagged
+      });
+    } catch (e) {
+      console.error("Toggle flag failed", e);
+      setEmails(emails); // Revert to current state (or keep previous)
+    }
+  };
+
+  const markAsRead = async (uid: string, seen: boolean) => {
+    // Optimistic update
+    setEmails(emails.map(e => {
+        if (e.uid === uid) {
+            const currentFlags = e.flags || [];
+            const newFlags = seen 
+                ? (currentFlags.includes("\\Seen") ? currentFlags : [...currentFlags, "\\Seen"])
+                : currentFlags.filter(f => f !== "\\Seen");
+            return { ...e, flags: newFlags };
+        }
+        return e;
+    }));
+
+    try {
+      await invoke("set_flag", {
+        accountEmail,
+        folderId: selectedFolderId,
+        uid,
+        flag: "\\Seen",
+        value: seen
+      });
+    } catch (e) {
+      console.error("Mark as read failed", e);
+    }
+  };
+
+  const loadMore = async () => {
+    if (loading || !selectedFolderId || !accountEmail || searchQuery) return;
+    setLoading(true);
+    try {
+      const moreMsgs: Email[] = await invoke("get_emails", { 
+        folderId: selectedFolderId, 
+        limit: 50, 
+        offset: emails.length 
+      });
+      setEmails([...emails, ...moreMsgs]);
+    } catch (e) {
+      console.error("Load more failed", e);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -145,6 +231,10 @@ export function useMailbox(accountEmail: string | null) {
     syncing,
     sync,
     fetchEmailDetails,
+    deleteEmails,
+    toggleFlag,
+    markAsRead,
+    loadMore,
     searchQuery,
     setSearchQuery,
   };

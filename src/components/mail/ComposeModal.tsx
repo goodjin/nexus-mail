@@ -15,13 +15,41 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [attachments, setAttachments] = useState<File[]>([]);
+  const [attachments, setAttachments] = useState<Array<{ name: string, path: string, size: number }>>([]);
 
   if (!isOpen) return null;
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      setAttachments([...attachments, ...Array.from(e.target.files)]);
+  const handleAddAttachment = async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const { lstat } = await import("@tauri-apps/plugin-fs");
+      
+      const selected = await open({
+        multiple: true,
+        title: "Select Attachments"
+      });
+
+      if (selected && Array.isArray(selected)) {
+        const newAttachments = await Promise.all(selected.map(async (path) => {
+          const stats = await lstat(path);
+          return {
+            name: path.split('/').pop() || "unnamed",
+            path,
+            size: stats.size
+          };
+        }));
+        setAttachments([...attachments, ...newAttachments]);
+      } else if (selected) {
+          const path = selected as string;
+          const stats = await lstat(path);
+          setAttachments([...attachments, {
+              name: path.split('/').pop() || "unnamed",
+              path,
+              size: stats.size
+          }]);
+      }
+    } catch (e) {
+      console.error("Failed to add attachment", e);
     }
   };
 
@@ -38,7 +66,8 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
         from: fromAccount,
         to,
         subject,
-        body
+        body,
+        attachments: attachments.map(a => a.path)
       });
       onClose();
     } catch (e) {
@@ -124,17 +153,10 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
         
         <div className="p-4 border-t flex items-center justify-between bg-nexus-sidebar/10">
           <div className="flex space-x-2">
-            <input 
-              type="file" 
-              id="attachment-input" 
-              className="hidden" 
-              multiple 
-              onChange={handleFileChange}
-            />
             <Button 
                 variant="ghost" 
                 size="icon"
-                onClick={() => document.getElementById('attachment-input')?.click()}
+                onClick={handleAddAttachment}
             >
               <Paperclip className="w-5 h-5 text-nexus-muted" />
             </Button>
@@ -145,6 +167,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
                 className="bg-nexus-accent hover:bg-nexus-accent/90 text-white px-6 rounded-xl flex items-center space-x-2"
                 onClick={handleSend}
                 disabled={sending}
+                data-testid="compose-send-button"
             >
               <Send className="w-4 h-4" />
               <span>{sending ? 'Sending...' : 'Send'}</span>

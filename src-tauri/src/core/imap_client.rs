@@ -117,15 +117,72 @@ impl MailClient for RealImapClient {
         };
 
         self.return_session(state).await;
-        Ok(folders
-            .iter()
-            .map(|f| FolderInfo {
-                id: uuid::Uuid::new_v4().to_string(),
-                name: f.name().into(),
-                remote_id: f.name().into(),
+        let mut folder_infos = Vec::new();
+        let mut seen_system_ids = std::collections::HashSet::new();
+
+        for f in &folders {
+            let raw_name = f.name().to_string();
+            let decoded_name = utf7_imap::decode_utf7_imap(raw_name.clone());
+            let name_upper = decoded_name.to_uppercase();
+            
+            let mut system_role = None;
+            
+            // 1. Attribute matching (RFC 6154 SPECIAL-USE)
+            for attr in f.attributes() {
+                let attr_str = format!("{:?}", attr).to_uppercase();
+                if attr_str.contains("SENT") { system_role = Some("SENT".to_string()); }
+                else if attr_str.contains("DRAFTS") { system_role = Some("DRAFTS".to_string()); }
+                else if attr_str.contains("TRASH") { system_role = Some("TRASH".to_string()); }
+                else if attr_str.contains("JUNK") || attr_str.contains("SPAM") { system_role = Some("SPAM".to_string()); }
+                else if attr_str.contains("ARCHIVE") { system_role = Some("ARCHIVE".to_string()); }
+            }
+
+            // 2. Name matching fallback
+            if system_role.is_none() {
+                if name_upper == "INBOX" || name_upper.contains("收件箱") { 
+                    system_role = Some("INBOX".to_string()); 
+                }
+                else if name_upper.contains("SENT") || name_upper.contains("已发送") || name_upper.contains("发送内容") { 
+                    system_role = Some("SENT".to_string()); 
+                }
+                else if name_upper.contains("DRAFTS") || name_upper.contains("DRAFT") || name_upper.contains("草稿") { 
+                    system_role = Some("DRAFTS".to_string()); 
+                }
+                else if name_upper.contains("TRASH") || name_upper.contains("DELETED") || name_upper.contains("BIN") || name_upper.contains("已删除") || name_upper.contains("垃圾箱") { 
+                    system_role = Some("TRASH".to_string()); 
+                }
+                else if name_upper.contains("SPAM") || name_upper.contains("JUNK") || name_upper.contains("垃圾邮件") || name_upper.contains("垃圾") { 
+                    system_role = Some("SPAM".to_string()); 
+                }
+                else if name_upper.contains("ARCHIVE") || name_upper.contains("归档") { 
+                    system_role = Some("ARCHIVE".to_string()); 
+                }
+            }
+
+            // Standardize INBOX id
+            if name_upper == "INBOX" {
+                system_role = Some("INBOX".to_string());
+            }
+
+            // Deduplication & Skipping
+            if let Some(ref role) = system_role {
+                if seen_system_ids.contains(role) {
+                    // Skip this folder entirely if we already have a folder for this system role
+                    continue;
+                } else {
+                    seen_system_ids.insert(role.clone());
+                }
+            }
+
+            folder_infos.push(FolderInfo {
+                id: uuid::Uuid::new_v4().to_string(), 
+                name: decoded_name,
+                remote_id: raw_name,
                 unread_count: 0,
-            })
-            .collect())
+                system_role,
+            });
+        }
+        Ok(folder_infos)
     }
 
     async fn select_folder(&mut self, folder: &str) -> Result<()> {
@@ -264,7 +321,7 @@ impl MailClient for RealImapClient {
         Self::parse_structure(structure, "".to_string(), &mut attachments, &mut text_parts);
 
         // 按需拉取正文部分
-        for (path, mime) in text_parts {
+        for (path, mime, charset, encoding) in text_parts {
             let part_data = match &mut state {
                 ImapState::AuthenticatedPlain(s) => s.uid_fetch(uid, format!("BODY.PEEK[{}]", path))?,
                 ImapState::AuthenticatedSsl(s) => s.uid_fetch(uid, format!("BODY.PEEK[{}]", path))?,
@@ -273,11 +330,26 @@ impl MailClient for RealImapClient {
             
             let section = Self::build_section_path(&path);
             if let Some(p) = part_data.iter().next().and_then(|i| i.section(&section)) {
-                let content = String::from_utf8_lossy(p).to_string();
+                // Construct a fake MIME email string to reuse mailparse's robust decoding and charset converting logic!
+                // Notice we ensure the transfer encoding and charset are set so mailparse decodes base64/qp AND gb2312/utf8 correctly!
+                let mock_headers = format!(
+                    "Content-Type: {}; charset=\"{}\"\r\nContent-Transfer-Encoding: {}\r\n\r\n", 
+                    mime, charset, encoding
+                );
+                
+                let mut fake_email = mock_headers.into_bytes();
+                fake_email.extend_from_slice(p);
+
+                let decoded_content = if let Ok(parsed) = mailparse::parse_mail(&fake_email) {
+                    parsed.get_body().unwrap_or_else(|_| String::from_utf8_lossy(p).to_string())
+                } else {
+                    String::from_utf8_lossy(p).to_string()
+                };
+
                 if mime == "text/html" && body_html.is_none() {
-                    body_html = Some(content);
+                    body_html = Some(decoded_content);
                 } else if mime == "text/plain" && body_text.is_none() {
-                    body_text = Some(content);
+                    body_text = Some(decoded_content);
                 }
             }
         }
@@ -390,7 +462,7 @@ impl RealImapClient {
         bs: &imap_proto::types::BodyStructure<'_>,
         path: String,
         attachments: &mut Vec<super::traits::AttachmentInfo>,
-        text_parts: &mut Vec<(String, String)>,
+        text_parts: &mut Vec<(String, String, String, String)>,
     ) {
         match bs {
             imap_proto::types::BodyStructure::Basic { common, other, .. } => {
@@ -417,7 +489,7 @@ impl RealImapClient {
         other: &imap_proto::types::BodyContentSinglePart<'_>,
         path: String,
         attachments: &mut Vec<super::traits::AttachmentInfo>,
-        text_parts: &mut Vec<(String, String)>,
+        text_parts: &mut Vec<(String, String, String, String)>,
     ) {
         let mime = format!("{}/{}", common.ty.ty, common.ty.subtype).to_lowercase();
         let disposition_ty = common.disposition.as_ref().map(|d| d.ty.to_lowercase()).unwrap_or_default();
@@ -440,7 +512,21 @@ impl RealImapClient {
                 size: other.octets as usize,
             });
         } else if mime == "text/plain" || mime == "text/html" {
-            text_parts.push((path, mime));
+            let charset = common.ty.params.as_ref()
+                .and_then(|p| p.iter().find(|pair| pair.0.to_lowercase() == "charset").map(|pair| pair.1.to_string()))
+                .unwrap_or_else(|| "utf-8".to_string());
+                
+            // Actually `imap_proto::types::BodyContentSinglePart` has `transfer_encoding: ContentEncoding<'a>`.
+            let encoding = match other.transfer_encoding {
+                imap_proto::types::ContentEncoding::SevenBit => "7bit",
+                imap_proto::types::ContentEncoding::EightBit => "8bit",
+                imap_proto::types::ContentEncoding::Binary => "binary",
+                imap_proto::types::ContentEncoding::Base64 => "base64",
+                imap_proto::types::ContentEncoding::QuotedPrintable => "quoted-printable",
+                imap_proto::types::ContentEncoding::Other(s) => s,
+            }.to_string();
+
+            text_parts.push((path, mime, charset, encoding));
         }
     }
 
@@ -463,12 +549,18 @@ impl RealImapClient {
 
         let mut subject = String::from("(No Subject)");
         let mut from = String::from("(Unknown Sender)");
-        let date = String::new();
+        let mut date = String::new();
+        let mut message_id = None;
 
         for header in headers {
             match header.get_key().to_lowercase().as_str() {
                 "subject" => subject = header.get_value(),
                 "from" => from = header.get_value(),
+                "date" => date = header.get_value(),
+                "message-id" => {
+                    let val = header.get_value().trim_matches(|c| c == '<' || c == '>').to_string();
+                    message_id = Some(format!("<{}>", val)); // Keep angle brackets standardized locally
+                }
                 _ => {}
             }
         }
@@ -485,6 +577,7 @@ impl RealImapClient {
             date,
             snippet: String::from("..."),
             flags,
+            message_id,
         })
     }
 }

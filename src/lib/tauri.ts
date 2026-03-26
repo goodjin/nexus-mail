@@ -35,12 +35,11 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
         }] as any;
       case "get_folders":
         return [
-          { id: "mock-inbox", name: "Inbox", remote_id: "inbox", unread_count: 95 },
-          { id: "mock-sent", name: "Sent", remote_id: "sent", unread_count: 0 },
-          { id: "mock-drafts", name: "Drafts", remote_id: "drafts", unread_count: 2 },
-          { id: "mock-spam", name: "Spam", remote_id: "spam", unread_count: 5 },
-          { id: "mock-trash", name: "Trash", remote_id: "trash", unread_count: 0 },
-          { id: "mock-archive", name: "Archive", remote_id: "archive", unread_count: 0 }
+          { id: "mock-inbox", name: "Inbox", remote_id: "inbox", unread_count: 95, system_role: "INBOX" },
+          { id: "mock-sent", name: "Sent", remote_id: "sent", unread_count: 0, system_role: "SENT" },
+          { id: "mock-drafts", name: "Drafts", remote_id: "drafts", unread_count: 2, system_role: "DRAFTS" },
+          { id: "mock-spam", name: "Spam", remote_id: "spam", unread_count: 5, system_role: "SPAM" },
+          { id: "mock-trash", name: "Trash", remote_id: "trash", unread_count: 0, system_role: "TRASH" }
         ] as any;
       case "get_emails":
         return Array.from({ length: 100 }, (_, i) => {
@@ -49,7 +48,7 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
             uid: String(id), 
             subject: `Nexus Mail Sample #${id}`, 
             from: `sender-${id}@mock.com`, 
-            date: "10:00 AM", 
+            date: "Wed, 25 Mar 2026 10:19:36 +0800", 
             snippet: `Mock content for message ${id}`,
             flags: id > 5 ? ["\\Seen"] : [] // Mock some unread
           };
@@ -77,6 +76,12 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
         } as any;
       case "get_setting":
         return "mock-value" as any;
+      case "test_account_connection":
+        await new Promise(r => setTimeout(r, 1500));
+        if (args.password === "error") {
+          throw "Mock Connection Failed: Invalid password";
+        }
+        return {} as any;
       default:
         return [] as any;
     }

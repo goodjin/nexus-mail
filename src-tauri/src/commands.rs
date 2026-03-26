@@ -49,6 +49,49 @@ pub async fn update_account_password(
 }
 
 #[tauri::command]
+pub async fn test_account_connection(
+    imap_host: String,
+    imap_port: u16,
+    imap_use_tls: bool,
+    smtp_host: String,
+    smtp_port: u16,
+    smtp_use_tls: bool,
+    email: String,
+    password: Option<String>,
+) -> Result<(), String> {
+    crate::info!("Testing connection for {}", email);
+    
+    let pass = password.unwrap_or_else(|| {
+        SecurityService::get_password(&email).unwrap_or_default()
+    });
+
+    // 1. 测试 IMAP
+    let mut imap_client = RealImapClient::new(&imap_host, imap_port, &email, imap_use_tls);
+    if let Err(e) = imap_client.connect().await {
+        return Err(format!("IMAP Connection Failed: {}", e));
+    }
+    if let Err(e) = imap_client.login(&email, &pass).await {
+        return Err(format!("IMAP Login Failed: {}", e));
+    }
+    crate::info!("IMAP test success for {}", email);
+
+    // 2. 测试 SMTP
+    let smtp_client = RealSmtpClient::new(&smtp_host, smtp_port, smtp_use_tls);
+    // RealSmtpClient 目前没有显式的 connect 接口，但在发送时会连接。
+    // 为了测试，我们可以尝试建立一个 TCP 连接。
+    if smtp_use_tls {
+        let connector = native_tls::TlsConnector::builder().build().map_err(|e| e.to_string())?;
+        let stream = std::net::TcpStream::connect((smtp_host.as_str(), smtp_port)).map_err(|e| format!("SMTP TCP Connect Failed: {}", e))?;
+        let _ = connector.connect(&smtp_host, stream).map_err(|e| format!("SMTP TLS Handshake Failed: {}", e))?;
+    } else {
+        let _ = std::net::TcpStream::connect((smtp_host.as_str(), smtp_port)).map_err(|e| format!("SMTP TCP Connect Failed: {}", e))?;
+    }
+    crate::info!("SMTP test success for {}", email);
+
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn list_accounts(db: State<'_, Database>) -> Result<Vec<String>, String> {
     sqlx::query_as::<sqlx::Sqlite, (String,)>("SELECT email FROM accounts")
         .fetch_all(&db.pool)
@@ -85,19 +128,73 @@ pub async fn sync_account(
         .await
         .map_err(|e| e.to_string())?;
 
-    let db_folders = db.get_folders_by_account(&account.id).await.map_err(|e| e.to_string())?;
+    // One-time cleanup for legacy data without system_role
+    if !db.has_any_system_roles(&account.id).await.unwrap_or(false) {
+        crate::info!("Legacy folder data detected for {}, performing one-time cleanup", email);
+        let _ = db.delete_all_folders_for_account(&account.id).await;
+    }
+
+    // IMAP LIST logic to align folders dynamically
+    let remote_folders = client.get_folders().await.map_err(|e| e.to_string())?;
+    let db_folders_initial = db.get_folders_for_account(&account.id).await.map_err(|e| e.to_string())?;
+    
+    let remote_ids: std::collections::HashSet<String> = remote_folders.iter().map(|f| f.remote_id.clone()).collect();
+    let _local_ids: std::collections::HashSet<String> = db_folders_initial.iter().map(|f| f.remote_id.clone()).collect();
+
+    // 1. Add/Update Folders
+    for remote_f in remote_folders {
+        crate::info!("Syncing remote folder: {} (Role: {:?})", remote_f.remote_id, remote_f.system_role);
+        let _ = db.upsert_folder(
+            &account.id, 
+            &remote_f.remote_id, 
+            &remote_f.name, 
+            0, 
+            remote_f.system_role.as_deref()
+        ).await;
+    }
+
+    // 2. Delete Excess (non-system)
+    let system_folders = ["INBOX", "SENT", "DRAFTS", "SPAM", "TRASH", "ARCHIVE"];
+    for local_f in db_folders_initial {
+        if !remote_ids.contains(&local_f.remote_id) {
+            let upper = local_f.remote_id.to_uppercase();
+            if !system_folders.contains(&upper.as_str()) {
+                crate::info!("Deleting obsolete remote folder: {}", local_f.remote_id);
+                let _ = db.delete_folder(&local_f.id).await;
+            }
+        }
+    }
+
+    // Fetch aligned folders to begin email sync
+    let db_folders = db.get_folders_for_account(&account.id).await.map_err(|e| e.to_string())?;
+    let mut has_errors = false;
     for db_folder in db_folders {
         let folder = traits::FolderInfo {
             id: db_folder.id,
             remote_id: db_folder.remote_id,
             name: db_folder.name,
             unread_count: db_folder.unread_count as u32,
+            system_role: db_folder.system_role,
         };
-        engine.sync_emails::<RealImapClient>(&mut client, &folder.id, &folder.remote_id).await.map_err(|e| e.to_string())?;
-        engine.prune_deleted_emails::<RealImapClient>(&mut client, &folder.id, &folder.remote_id).await.map_err(|e| e.to_string())?;
+        
+        if let Err(e) = engine.sync_emails::<RealImapClient>(&mut client, &folder.id, &folder.remote_id).await {
+            crate::error!("Failed to sync folder {}: {}", folder.remote_id, e);
+            has_errors = true;
+            continue;
+        }
+        
+        if let Err(e) = engine.prune_deleted_emails::<RealImapClient>(&mut client, &folder.id, &folder.remote_id).await {
+            crate::error!("Failed to prune folder {}: {}", folder.remote_id, e);
+            has_errors = true;
+            continue;
+        }
     }
 
-    Ok(format!("Account {} synced successfully", email))
+    if has_errors {
+        Ok(format!("Account {} synced with some folder errors (check logs)", email))
+    } else {
+        Ok(format!("Account {} synced successfully", email))
+    }
 }
 
 #[tauri::command]
@@ -148,9 +245,9 @@ pub async fn get_folders(
     db: State<'_, Database>,
     account_email: String,
 ) -> Result<Vec<FolderInfo>, String> {
-    sqlx::query_as::<sqlx::Sqlite, (String, String, String, i64)>(
+    sqlx::query_as::<sqlx::Sqlite, (String, String, String, i64, Option<String>)>(
         "
-        SELECT folders.id, remote_id, name, unread_count 
+        SELECT folders.id, remote_id, name, unread_count, system_role 
         FROM folders 
         JOIN accounts ON folders.account_id = accounts.id 
         WHERE accounts.email = ?",
@@ -160,11 +257,12 @@ pub async fn get_folders(
     .await
     .map(|rows| {
         rows.into_iter()
-            .map(|(id, remote_id, name, unread_count)| FolderInfo {
+            .map(|(id, remote_id, name, unread_count, system_role)| FolderInfo {
                 id,
                 name,
                 remote_id,
                 unread_count: unread_count as u32,
+                system_role,
             })
             .collect()
     })
@@ -202,6 +300,7 @@ pub async fn get_emails(
                     date,
                     snippet,
                     flags,
+                    message_id: None,
                 }
             })
             .collect()
@@ -254,6 +353,7 @@ pub async fn search_emails(
                     date: email.3,
                     snippet: email.4,
                     flags,
+                    message_id: None,
                 });
             }
         }
@@ -284,28 +384,29 @@ pub async fn send_email(
         account.smtp_use_tls
     );
 
-    let msg_bytes = smtp_client
+    let (_, msg_id_val) = smtp_client
         .send_email(&from, &to, &subject, &body, attachments)
         .await
         .map_err(|e: anyhow::Error| format!("SMTP Error: {}", e))?;
 
-    let password = SecurityService::get_password(&from)
-        .map_err(|e: anyhow::Error| e.to_string())?;
-
-    let mut imap_client = RealImapClient::new(
-        &account.imap_host,
-        account.imap_port as u16,
-        &account.email,
-        account.imap_use_tls,
-    );
-
-    if let Ok(_) = imap_client.connect().await {
-        if let Ok(_) = imap_client.login(&account.email, &password).await {
-            let _ = imap_client.append_message("SENT", &msg_bytes).await;
+    // Save to local Sent folder
+    if let Ok(folders) = db.get_folders_for_account(&account.id).await {
+        if let Some(sent_folder) = folders.iter().find(|f: &&FolderInfo| f.system_role.as_deref() == Some("SENT") || f.remote_id.eq_ignore_ascii_case("SENT")) {
+            let local_uid = format!("local-sent-{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
+            let summary = crate::core::traits::EmailSummary {
+                uid: local_uid,
+                subject: subject.clone(),
+                from: from.clone(),
+                date: chrono::Local::now().to_rfc2822(),
+                snippet: body.chars().take(100).collect(),
+                flags: vec!["\\Seen".to_string()],
+                message_id: Some(msg_id_val),
+            };
+            let _ = db.upsert_email(&sent_folder.id, &summary).await;
         }
     }
 
-    Ok(format!("Email sent to {} successfully (with Fcc)", to))
+    Ok(format!("Email sent to {} successfully (local save only)", to))
 }
 
 #[tauri::command]
@@ -394,6 +495,32 @@ pub async fn update_email_flag(
         .await
         .map_err(|e| e.to_string())?;
 
+    if let Ok((flags_json,)) = sqlx::query_as::<_, (String,)>("SELECT flags FROM emails WHERE folder_id = ? AND remote_id = ?")
+        .bind(&folder_id)
+        .bind(&uid)
+        .fetch_one(&db.pool)
+        .await
+    {
+        let mut flags: Vec<String> = serde_json::from_str(&flags_json).unwrap_or_default();
+        if value {
+            if !flags.contains(&flag) {
+                flags.push(flag.clone());
+            }
+        } else {
+            flags.retain(|f| f != &flag);
+        }
+        let new_flags_json = serde_json::to_string(&flags).unwrap_or_else(|_| "[]".to_string());
+        
+        let _ = sqlx::query("UPDATE emails SET flags = ? WHERE folder_id = ? AND remote_id = ?")
+            .bind(new_flags_json)
+            .bind(&folder_id)
+            .bind(&uid)
+            .execute(&db.pool)
+            .await;
+            
+        let _ = db.update_folder_unread_count(&folder_id).await;
+    }
+
     Ok(())
 }
 
@@ -444,6 +571,8 @@ pub async fn delete_email(
         .await
         .map_err(|e| e.to_string())?;
 
+    let _ = db.update_folder_unread_count(&folder_id).await;
+
     Ok(())
 }
 
@@ -485,12 +614,11 @@ pub async fn dev_seed_data(db: State<'_, Database>) -> Result<String, String> {
 
     SecurityService::set_password(email, "pass").map_err(|e| e.to_string())?;
 
-    let inbox_id = db.upsert_folder(&acct_id, "INBOX", "Inbox", 95).await.map_err(|e| e.to_string())?;
-    db.upsert_folder(&acct_id, "SENT", "Sent", 0).await.map_err(|e| e.to_string())?;
-    db.upsert_folder(&acct_id, "TRASH", "Trash", 0).await.map_err(|e| e.to_string())?;
-    db.upsert_folder(&acct_id, "DRAFTS", "Drafts", 2).await.map_err(|e| e.to_string())?;
-    db.upsert_folder(&acct_id, "SPAM", "Spam", 5).await.map_err(|e| e.to_string())?;
-    db.upsert_folder(&acct_id, "ARCHIVE", "Archive", 0).await.map_err(|e| e.to_string())?;
+    let inbox_id = db.upsert_folder(&acct_id, "INBOX", "Inbox", 95, Some("INBOX")).await.map_err(|e| e.to_string())?;
+    db.upsert_folder(&acct_id, "SENT", "Sent", 0, Some("SENT")).await.map_err(|e| e.to_string())?;
+    db.upsert_folder(&acct_id, "TRASH", "Trash", 0, Some("TRASH")).await.map_err(|e| e.to_string())?;
+    db.upsert_folder(&acct_id, "DRAFTS", "Drafts", 2, Some("DRAFTS")).await.map_err(|e| e.to_string())?;
+    db.upsert_folder(&acct_id, "SPAM", "Spam", 5, Some("SPAM")).await.map_err(|e| e.to_string())?;
 
     for i in 1..=100 {
         let is_unread = i <= 95;
@@ -502,6 +630,7 @@ pub async fn dev_seed_data(db: State<'_, Database>) -> Result<String, String> {
             date: format!("{:02}:{:02} AM", 9 + (i/60), i % 60),
             snippet: format!("Mock message #{} which might contain more text to show the snippet logic in the email list item card.", i),
             flags,
+            message_id: None,
         };
         db.upsert_email(&inbox_id, &summary).await.map_err(|e| e.to_string())?;
     }

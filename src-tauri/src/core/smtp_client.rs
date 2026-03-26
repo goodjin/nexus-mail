@@ -28,17 +28,21 @@ impl MailSender for RealSmtpClient {
         subject: &str,
         body: &str,
         attachments: Vec<String>,
-    ) -> Result<Vec<u8>> {
-        use lettre::message::{Attachment, MultiPart, SinglePart, header::ContentType};
+    ) -> Result<(Vec<u8>, String)> {
+        use lettre::message::{Attachment, MultiPart, SinglePart, header::ContentType, header::MessageId};
 
-        // 获取密码 (从 SecurityService)
         let password = crate::core::security::SecurityService::get_password(from)
             .context("Failed to get password for SMTP")?;
+
+        let raw_msg_id = uuid::Uuid::new_v4().to_string();
+        let msg_id_domain = from.split('@').nth(1).unwrap_or("nexus-mail.local");
+        let msg_id_val = format!("<{}@{}>", raw_msg_id, msg_id_domain);
 
         let builder = Message::builder()
             .from(from.parse()?)
             .to(to.parse()?)
-            .subject(subject);
+            .subject(subject)
+            .message_id(Some(msg_id_val.clone()));
 
         let email = if attachments.is_empty() {
             builder.header(ContentType::TEXT_PLAIN).body(body.to_string())?
@@ -85,7 +89,7 @@ impl MailSender for RealSmtpClient {
             .send(&email)
             .map_err(|e| anyhow::anyhow!("SMTP Error: {}", e))?;
 
-        Ok(email.formatted())
+        Ok((email.formatted(), msg_id_val))
     }
 }
 

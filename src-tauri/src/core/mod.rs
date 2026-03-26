@@ -1,5 +1,6 @@
 pub mod database;
 pub mod imap_client;
+pub mod logger;
 pub mod mock_client;
 pub mod security;
 pub mod smtp_client;

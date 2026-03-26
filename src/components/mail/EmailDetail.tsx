@@ -1,10 +1,10 @@
 import React from "react";
 import { Email } from "../../hooks/useMailbox";
 import DOMPurify from "dompurify";
-import { Trash2, Archive, MailOpen, Flag, Paperclip, Download } from "lucide-react";
+import { Trash2, MailOpen, Flag, Paperclip, Download } from "lucide-react";
 import { Button } from "../ui/Button";
 import { invoke } from "../../lib/tauri";
-import { cn } from "../../lib/utils";
+import { cn, formatDate } from "../../lib/utils";
 import { useSettings } from "../../hooks/useSettings";
 
 interface EmailDetailProps {
@@ -52,15 +52,17 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     );
   }
 
-  const sanitizedBody = DOMPurify.sanitize(email.body_html || email.snippet);
+  const hasHtml = !!email.body_html;
+  const displayContent = email.body_html || email.body_text || email.snippet;
+  const sanitizedBody = DOMPurify.sanitize(displayContent);
   const isFlagged = email.flags?.includes("\\Flagged");
   const isSeen = email.flags?.includes("\\Seen");
 
   return (
     <main className="h-full flex-1 flex flex-col bg-nexus-background overflow-hidden text-nexus-foreground">
-      <header className="p-8 border-b">
+      <header className="px-8 py-6 border-b">
         <div className="flex justify-between items-start mb-6">
-          <h1 className="text-2xl font-bold flex-1 mr-4">{email.subject}</h1>
+          <h1 className="text-2xl font-bold flex-1 mr-4 leading-tight">{email.subject}</h1>
           <div className="flex items-center gap-1">
             <Button 
                 variant="ghost" 
@@ -84,9 +86,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
             >
               <Flag className={cn("w-4 h-4", isFlagged ? "fill-nexus-accent text-nexus-accent" : "text-nexus-muted")} />
             </Button>
-            <Button variant="ghost" size="icon" title="Archive" data-testid="action-archive">
-              <Archive className="w-4 h-4 text-nexus-muted" />
-            </Button>
+
             <Button 
                 variant="ghost" 
                 size="icon" 
@@ -103,20 +103,29 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
             </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-nexus-primary/10 flex items-center justify-center text-nexus-primary font-bold text-xs">
+        
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-full bg-nexus-primary/10 flex items-center justify-center text-nexus-primary font-bold text-sm mt-1">
             {email.from.charAt(0).toUpperCase()}
           </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-semibold">{email.from}</span>
-            <span className="text-xs text-nexus-muted">To: me • {email.date}</span>
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold text-nexus-foreground">{email.from}</span>
+            </div>
+            <div className="text-[11px] text-nexus-muted flex flex-col gap-0.5">
+              <p>收件人: <span className="text-nexus-foreground/80">me</span></p>
+              <p>日期: <span className="text-nexus-foreground/80">{formatDate(email.date)}</span></p>
+            </div>
           </div>
         </div>
       </header>
       
       <div className="flex-1 overflow-y-auto p-8">
         <div 
-          className="prose prose-sm max-w-none text-nexus-foreground"
+          className={cn(
+            "prose prose-sm max-w-none text-nexus-foreground",
+            !hasHtml && "whitespace-pre-wrap font-sans"
+          )}
           dangerouslySetInnerHTML={{ __html: sanitizedBody }} 
         />
 

@@ -2,8 +2,8 @@ import React from "react";
 import { Email } from "../../hooks/useMailbox";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
-import { cn } from "../../lib/utils";
-import { Search, X, Trash2, RefreshCw } from "lucide-react";
+import { cn, formatDate } from "../../lib/utils";
+import { Search, X, Trash2, RefreshCw, Flag, Paperclip } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
 
 interface EmailListProps {
@@ -18,6 +18,114 @@ interface EmailListProps {
   onLoadMore: () => void;
 }
 
+const EmailItem = React.memo(({ 
+  email, 
+  itemSelected, 
+  onEmailSelect, 
+  isMultiSelected, 
+  toggleSelect,
+  isSelectionMode
+}: {
+  email: Email;
+  itemSelected: boolean;
+  onEmailSelect: (email: Email) => void;
+  isMultiSelected: boolean;
+  toggleSelect: (uid: string, e: React.MouseEvent) => void;
+  isSelectionMode: boolean;
+}) => {
+  return (
+    <div className="p-2 pt-1 pb-1 flex items-center gap-2 group">
+      <div className={cn(
+        "flex-shrink-0 transition-all duration-200",
+        isSelectionMode ? "w-6 opacity-100" : "w-0 opacity-0 group-hover:w-6 group-hover:opacity-100"
+      )}>
+        <div 
+          onClick={(e) => toggleSelect(email.uid, e)}
+          className={cn(
+            "w-5 h-5 rounded-full border-2 cursor-pointer flex items-center justify-center transition-all",
+            isMultiSelected 
+              ? "bg-nexus-accent border-nexus-accent text-white" 
+              : "bg-transparent border-nexus-border hover:border-nexus-accent"
+          )}
+        >
+          {isMultiSelected && (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          )}
+        </div>
+      </div>
+      
+      <Card 
+        data-testid={`email-card-${email.uid}`}
+        selected={itemSelected}
+        onClick={() => onEmailSelect(email)}
+        className="cursor-pointer p-4 flex-1 relative overflow-hidden group/card"
+      >
+        {/* Red Flag Indicator (Top-Left) */}
+        {email.flags?.includes("\\Flagged") && (
+           <div className="absolute top-0 left-0">
+             <div className="w-0 h-0 border-t-[16px] border-t-red-500 border-r-[16px] border-r-transparent" />
+             <Flag className="absolute top-0.5 left-0.5 w-2 h-2 text-white fill-white" />
+           </div>
+        )}
+
+        <div className="flex flex-col gap-1">
+          {/* Row 1: Subject (Title) */}
+          <div className="flex justify-between items-start gap-2">
+            <h3 className={cn(
+              "text-sm font-bold truncate flex-1",
+              itemSelected ? "text-nexus-primary-foreground" : "text-nexus-foreground"
+            )}>
+              {email.subject || "(No Subject)"}
+            </h3>
+          </div>
+
+          {/* Row 2: Sender & Time */}
+          <div className="flex justify-between items-center text-[11px]">
+            <span className={cn(
+              "font-medium truncate max-w-[160px]",
+              itemSelected ? "text-nexus-primary-foreground/90" : "text-nexus-muted"
+            )}>
+              {email.from}
+            </span>
+            <span className={cn(
+              "whitespace-nowrap flex-shrink-0 ml-2",
+              itemSelected ? "text-nexus-primary-foreground/70" : "text-nexus-muted"
+            )}>
+              {formatDate(email.date)}
+            </span>
+          </div>
+
+          {/* Row 3: Snippet & Icons */}
+          <div className="flex items-end gap-2 mt-0.5">
+            <div className={cn(
+              "text-xs line-clamp-1 flex-1",
+              itemSelected ? "text-nexus-primary-foreground/80" : "text-nexus-muted"
+            )}>
+              {email.snippet}
+            </div>
+            {email.attachments && email.attachments.length > 0 && (
+              <Paperclip className={cn(
+                "w-3 h-3 flex-shrink-0",
+                itemSelected ? "text-nexus-primary-foreground/60" : "text-nexus-muted"
+              )} />
+            )}
+          </div>
+        </div>
+        
+        {/* Unread Indicator */}
+        {!email.flags?.includes("\\Seen") && (
+            <div className={cn(
+                "absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-nexus-accent mr-2",
+                itemSelected && "bg-white"
+            )} />
+        )}
+      </Card>
+    </div>
+  );
+});
+
 export const EmailList: React.FC<EmailListProps> = ({
   emails,
   selectedEmailId,
@@ -31,16 +139,18 @@ export const EmailList: React.FC<EmailListProps> = ({
 }) => {
   const [selectedUids, setSelectedUids] = React.useState<Set<string>>(new Set());
 
-  const toggleSelect = (uid: string, e: React.MouseEvent) => {
+  const toggleSelect = React.useCallback((uid: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    const newSelected = new Set(selectedUids);
-    if (newSelected.has(uid)) {
-      newSelected.delete(uid);
-    } else {
-      newSelected.add(uid);
-    }
-    setSelectedUids(newSelected);
-  };
+    setSelectedUids(prev => {
+      const newSelected = new Set(prev);
+      if (newSelected.has(uid)) {
+        newSelected.delete(uid);
+      } else {
+        newSelected.add(uid);
+      }
+      return newSelected;
+    });
+  }, []);
 
   const handleBulkDelete = async () => {
     if (confirm(`Delete ${selectedUids.size} emails?`)) {
@@ -49,8 +159,14 @@ export const EmailList: React.FC<EmailListProps> = ({
     }
   };
 
-  const selectAll = () => {
-    setSelectedUids(new Set(emails.map(e => e.uid)));
+  const isAllSelected = emails.length > 0 && selectedUids.size === emails.length;
+
+  const toggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedUids(new Set());
+    } else {
+      setSelectedUids(new Set(emails.map(e => e.uid)));
+    }
   };
 
   const invertSelection = () => {
@@ -73,9 +189,18 @@ export const EmailList: React.FC<EmailListProps> = ({
                <span data-testid="selected-count" className="text-[10px] font-bold bg-nexus-accent text-white w-5 h-5 flex items-center justify-center rounded-full mr-1">
                 {selectedUids.size}
               </span>
-              <Button variant="ghost" size="icon" onClick={selectAll} title="Select All" className="w-8 h-8">
-                <div className="w-4 h-4 border-2 border-nexus-muted rounded-sm flex items-center justify-center">
-                  <div className="w-2 h-2 bg-nexus-muted rounded-sm" />
+              <Button variant="ghost" size="icon" onClick={toggleSelectAll} title={isAllSelected ? "Deselect All" : "Select All"} className="w-8 h-8">
+                <div className={cn(
+                  "w-4 h-4 rounded-sm flex items-center justify-center transition-colors",
+                  isAllSelected ? "bg-nexus-accent border border-nexus-accent " : "border-2 border-nexus-muted"
+                )}>
+                  {isAllSelected ? (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : (
+                    <div className="w-2 h-2 bg-nexus-muted rounded-sm" />
+                  )}
                 </div>
               </Button>
               <Button variant="ghost" size="icon" onClick={invertSelection} title="Invert Selection" className="w-8 h-8">
@@ -124,76 +249,18 @@ export const EmailList: React.FC<EmailListProps> = ({
         <Virtuoso
           style={{ height: '100%' }}
           data={emails}
+          computeItemKey={(_index, email) => email.uid}
           endReached={onLoadMore}
           increaseViewportBy={200}
           itemContent={(_index, email) => (
-            <div className="p-2 pt-1 pb-1 flex items-center gap-2 group">
-              <div className={cn(
-                "flex-shrink-0 transition-all duration-200",
-                selectedUids.size > 0 ? "w-6 opacity-100" : "w-0 opacity-0 group-hover:w-6 group-hover:opacity-100"
-              )}>
-                <div 
-                  onClick={(e) => toggleSelect(email.uid, e)}
-                  className={cn(
-                    "w-5 h-5 rounded-full border-2 cursor-pointer flex items-center justify-center transition-all",
-                    selectedUids.has(email.uid) 
-                      ? "bg-nexus-accent border-nexus-accent text-white" 
-                      : "bg-transparent border-nexus-border hover:border-nexus-accent"
-                  )}
-                >
-                  {selectedUids.has(email.uid) && (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  )}
-                </div>
-              </div>
-              
-              <Card 
-                key={email.uid}
-                data-testid={`email-card-${email.uid}`}
-                selected={selectedEmailId === email.uid}
-                onClick={() => onEmailSelect(email)}
-                className="cursor-pointer p-4 flex-1 relative overflow-hidden"
-              >
-                <div className="flex justify-between items-start mb-1">
-                  <span className={cn(
-                    "text-sm font-semibold truncate max-w-[140px]",
-                    selectedEmailId === email.uid ? "text-nexus-primary-foreground" : "text-nexus-foreground"
-                  )}>
-                    {email.from}
-                  </span>
-                  <span className={cn(
-                    "text-[10px] uppercase tracking-wider",
-                    selectedEmailId === email.uid ? "text-nexus-primary-foreground/70" : "text-nexus-muted"
-                  )}>
-                    {email.date}
-                  </span>
-                </div>
-                <div className={cn(
-                  "text-sm font-medium mb-1 truncate",
-                  selectedEmailId === email.uid ? "text-nexus-primary-foreground" : "text-nexus-foreground"
-                )}>
-                  {email.subject}
-                </div>
-                <div className={cn(
-                  "text-xs line-clamp-2",
-                  selectedEmailId === email.uid ? "text-nexus-primary-foreground/80" : "text-nexus-muted"
-                )}>
-                  {email.snippet}
-                </div>
-                
-                {email.flags?.includes("\\Flagged") && (
-                   <div className="absolute top-0 right-0 w-2 h-2 bg-nexus-accent rounded-bl-full" />
-                )}
-                {!email.flags?.includes("\\Seen") && (
-                    <div className={cn(
-                        "absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-nexus-accent rounded-r-full",
-                        selectedEmailId === email.uid && "bg-white"
-                    )} />
-                )}
-              </Card>
-            </div>
+            <EmailItem
+              email={email}
+              itemSelected={selectedEmailId === email.uid}
+              onEmailSelect={onEmailSelect}
+              isMultiSelected={selectedUids.has(email.uid)}
+              toggleSelect={toggleSelect}
+              isSelectionMode={selectedUids.size > 0}
+            />
           )}
         />
       </div>

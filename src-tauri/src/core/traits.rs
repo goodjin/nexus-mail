@@ -21,6 +21,7 @@ pub struct FolderInfo {
     pub name: String,
     pub remote_id: String,
     pub unread_count: u32,
+    pub system_role: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -31,6 +32,7 @@ pub struct EmailSummary {
     pub date: String,
     pub snippet: String,
     pub flags: Vec<String>,
+    pub message_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -80,5 +82,5 @@ pub trait MailSender: Send + Sync {
         subject: &str,
         body: &str,
         attachments: Vec<String>,
-    ) -> Result<Vec<u8>>;
+    ) -> Result<(Vec<u8>, String)>;
 }

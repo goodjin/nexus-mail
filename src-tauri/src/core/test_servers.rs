@@ -60,6 +60,18 @@ impl MockServers {
                         stream.write_all(b"* LIST (\\HasNoChildren) \"/\" \"Sent\"\r\n")?;
                         stream.write_all(format!("{} OK LIST completed\r\n", tag).as_bytes())?;
                     }
+                    "SEARCH" => {
+                        let mut resp = String::from("* SEARCH");
+                        for i in 1001..=1100 {
+                            resp.push_str(&format!(" {}", i));
+                        }
+                        resp.push_str("\r\n");
+                        stream.write_all(resp.as_bytes())?;
+                        stream.write_all(format!("{} OK SEARCH completed\r\n", tag).as_bytes())?;
+                    }
+                    "NOOP" => {
+                        stream.write_all(format!("{} OK NOOP completed\r\n", tag).as_bytes())?;
+                    }
                     "SELECT" => {
                         stream.write_all(b"* 100 EXISTS\r\n")?;
                         stream.write_all(b"* 0 RECENT\r\n")?;
@@ -86,17 +98,22 @@ impl MockServers {
                             };
 
                             if line.contains("RFC822.HEADER") {
-                                for i in 1..=10 {
-                                    let uid = 1000 + i;
-                                    let header = format!("From: sender-{}@mock.com\r\nSubject: Mock Mail #{}\r\nDate: Mon, 23 Mar 2026 00:00:00 +0800\r\n\r\n", i, i);
+                                let mut generated = 0;
+                                for i in start..=end {
+                                    if i > 1100 { break; }
+                                    if i < 1001 { continue; }
+                                    let idx = i - 1000;
+                                    let header = format!("From: sender-{}@mock.com\r\nSubject: Mock Mail #{}\r\nDate: Mon, 23 Mar 2026 00:00:00 +0800\r\n\r\n", idx, idx);
                                     let resp = format!(
                                         "* {} FETCH (UID {} RFC822.HEADER {{{}}}\r\n{})\r\n",
+                                        idx,
                                         i,
-                                        uid,
                                         header.len(),
                                         header
                                     );
                                     stream.write_all(resp.as_bytes())?;
+                                    generated += 1;
+                                    if generated >= 150 { break; }
                                 }
                             } else if line.contains("BODY[]") || line.contains("RFC822") {
                                 let (fetch_uid, index) = if line.starts_with("UID") {

@@ -6,6 +6,7 @@ export interface Folder {
   name: string;
   remote_id: string;
   unread_count: number;
+  system_role?: string;
 }
 
 export interface Email {
@@ -87,6 +88,62 @@ export function useMailbox(accountEmail: string | null) {
     };
     fetchEmails();
   }, [selectedFolderId, accountEmail, searchQuery]);
+  
+  // Background pre-fetching (Continuous)
+  useEffect(() => {
+    if (!emails.length || !accountEmail || !selectedFolderId) return;
+    
+    // Find all emails that don't have bodies yet
+    const toPreFetch = emails.filter(e => !e.body_html && !e.body_text);
+      
+    if (toPreFetch.length === 0) return;
+
+    console.log(`[PreFetch] Starting for ${toPreFetch.length} remaining emails`);
+    
+    let isCancelled = false;
+    
+    const runPreFetch = async () => {
+      for (const email of toPreFetch) {
+        if (isCancelled) break;
+        
+        try {
+          // Check if it already has body (might have been updated by another fetch)
+          const current = emails.find(e => e.uid === email.uid);
+          if (current?.body_html || current?.body_text) continue;
+
+          const details: any = await invoke("get_email_details", {
+            accountEmail,
+            folderId: selectedFolderId,
+            uid: email.uid,
+          });
+          
+          if (isCancelled) break;
+
+          setEmails(prev => prev.map(e => e.uid === email.uid ? { 
+            ...e, 
+            body_html: details.body_html, 
+            body_text: details.body_text,
+            attachments: details.attachments,
+            flags: details.flags 
+          } : e));
+          
+          // Small delay to be polite to the server and local CPU
+          await new Promise(resolve => setTimeout(resolve, 200));
+        } catch (e) {
+          console.warn(`[PreFetch] Failed for ${email.uid}`, e);
+          // Wait a bit longer on error
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+      if (!isCancelled) console.log(`[PreFetch] Completed all available emails in ${selectedFolderId}`);
+    };
+    
+    const timer = setTimeout(runPreFetch, 1000); 
+    return () => {
+        isCancelled = true;
+        clearTimeout(timer);
+    };
+  }, [emails.length, selectedFolderId, accountEmail]);
 
   const sync = async () => {
     if (!accountEmail) return;
@@ -121,17 +178,14 @@ export function useMailbox(accountEmail: string | null) {
         folderId: selectedFolderId,
         uid: emailUid,
       });
+      const { body_html, body_text, attachments, flags } = details;
       return {
         uid: emailUid,
-        subject: "", // Original summary already has this
-        from: "",
-        date: "",
-        snippet: "",
-        body_html: details.body_html,
-        body_text: details.body_text,
-        attachments: details.attachments,
-        flags: details.flags,
-      };
+        body_html,
+        body_text,
+        attachments,
+        flags,
+      } as Email;
     } catch (e) {
       console.error("Failed to fetch email details", e);
       throw e;
@@ -166,7 +220,7 @@ export function useMailbox(accountEmail: string | null) {
     setEmails(emails.map(e => e.uid === uid ? { ...e, flags: newFlags } : e));
     
     try {
-      await invoke("set_flag", {
+      await invoke("update_email_flag", {
         accountEmail,
         folderId: selectedFolderId,
         uid,
@@ -180,20 +234,39 @@ export function useMailbox(accountEmail: string | null) {
   };
 
   const markAsRead = async (uid: string, seen: boolean) => {
-    // Optimistic update
+    let wasChanged = false;
+
+    // Optimistic update of email list
     setEmails(emails.map(e => {
         if (e.uid === uid) {
             const currentFlags = e.flags || [];
-            const newFlags = seen 
-                ? (currentFlags.includes("\\Seen") ? currentFlags : [...currentFlags, "\\Seen"])
-                : currentFlags.filter(f => f !== "\\Seen");
-            return { ...e, flags: newFlags };
+            const hasSeen = currentFlags.includes("\\Seen");
+            if (seen && !hasSeen) {
+                wasChanged = true;
+                return { ...e, flags: [...currentFlags, "\\Seen"] };
+            } else if (!seen && hasSeen) {
+                wasChanged = true;
+                return { ...e, flags: currentFlags.filter(f => f !== "\\Seen") };
+            }
         }
         return e;
     }));
 
+    if (!wasChanged) return;
+
+    // Optimistic update of folder unread badge
+    setFolders(folders.map(f => {
+        if (f.id === selectedFolderId) {
+            return {
+                ...f,
+                unread_count: seen ? Math.max(0, f.unread_count - 1) : f.unread_count + 1
+            };
+        }
+        return f;
+    }));
+
     try {
-      await invoke("set_flag", {
+      await invoke("update_email_flag", {
         accountEmail,
         folderId: selectedFolderId,
         uid,

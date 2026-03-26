@@ -44,6 +44,8 @@ md5 = "0.8.0"
 imap-proto = "0.10.2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+utf7-imap = "0.3.2"
+encoding_rs = "0.8.35"
 
 [dev-dependencies]
 mockall = "0.13"

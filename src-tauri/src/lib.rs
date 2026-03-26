@@ -23,6 +23,10 @@ pub fn run() {
                 std::fs::create_dir_all(&app_data_dir).expect("Failed to create app data dir");
             }
 
+            // 初始化日志
+            core::logger::init_logger(app_data_dir.clone());
+            crate::info!("Nexus Mail Backend Starting...");
+
             // 获取或生成数据库加密密钥 (SecurityService)
             let db_key = core::security::SecurityService::get_or_create_db_key()
                 .expect("Failed to initialize security service / keyring");
@@ -37,6 +41,9 @@ pub fn run() {
                     .await
                     .expect("Failed to initialize database")
             });
+
+            // 初始化同步引擎
+            let engine = core::sync_engine::SyncEngine::new(db.clone());
 
             // 初始化同步引擎
             let engine = core::sync_engine::SyncEngine::new(db.clone());
@@ -69,6 +76,7 @@ pub fn run() {
             commands::get_accounts_detailed,
             commands::update_account_details,
             commands::update_account_password,
+            commands::test_account_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

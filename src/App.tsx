@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useAccounts } from "./hooks/useAccounts";
+import { useAccountContext } from "./context/AccountContext";
 import { useMailbox, Email } from "./hooks/useMailbox";
 import { Sidebar } from "./components/layout/Sidebar";
 import { EmailList } from "./components/mail/EmailList";
@@ -14,7 +14,7 @@ const App: React.FC = () => {
     accounts, 
     selectedAccount, 
     setSelectedAccount
-  } = useAccounts();
+  } = useAccountContext();
 
   const {
     folders,
@@ -35,22 +35,28 @@ const App: React.FC = () => {
 
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
   
+  // Sync selectedEmail with the emails array if it was updated by pre-fetch
+  const effectiveEmail = React.useMemo(() => {
+    if (!selectedEmail) return null;
+    return emails.find(e => e.uid === selectedEmail.uid) || selectedEmail;
+  }, [emails, selectedEmail]);
+  
   // Fetch full details when email is selected
   useEffect(() => {
-    if (selectedEmail && !selectedEmail.body_html && !selectedEmail.body_text) {
+    if (effectiveEmail && !effectiveEmail.body_html && !effectiveEmail.body_text) {
       const getDetails = async () => {
         try {
-          const fullEmail = await fetchEmailDetails(selectedEmail.uid);
-          setSelectedEmail({ ...selectedEmail, ...fullEmail });
+          const fullEmail = await fetchEmailDetails(effectiveEmail.uid);
+          setSelectedEmail({ ...effectiveEmail, ...fullEmail });
         } catch (e) {
           console.error("Fetch details failed", e);
         }
       };
       getDetails();
     }
-  }, [selectedEmail?.uid]);
+  }, [effectiveEmail?.uid]);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsState, setSettingsState] = useState<{ isOpen: boolean, initialTab?: 'general' | 'accounts', initialAction?: 'add_account' }>({ isOpen: false });
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   // Auto-hide status messages
@@ -95,20 +101,27 @@ const App: React.FC = () => {
         onSync={handleSync}
         isSyncing={syncing}
         onCompose={() => setIsComposeOpen(true)}
-        onSettings={() => setIsSettingsOpen(true)}
+        onSettings={() => setSettingsState({ isOpen: true, initialTab: 'general' })}
+        onAddAccount={() => setSettingsState({ isOpen: true, initialTab: 'accounts', initialAction: 'add_account' })}
       />
 
       <EmailList 
         emails={emails}
-        selectedEmailId={selectedEmail?.uid || null}
-        onEmailSelect={setSelectedEmail}
+        selectedEmailId={effectiveEmail?.uid || null}
+        onEmailSelect={(email) => {
+          setSelectedEmail(email);
+          const isUnread = !email.flags?.includes("\\Seen");
+          if (isUnread) {
+            markAsRead(email.uid, true);
+          }
+        }}
         folderName={currentFolder?.name || "Inbox"}
         isLoading={emailsLoading}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         onDeleteEmails={async (uids) => {
             await deleteEmails(uids);
-            if (selectedEmail && uids.includes(selectedEmail.uid)) {
+            if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
                 setSelectedEmail(null);
             }
         }}
@@ -116,7 +129,7 @@ const App: React.FC = () => {
       />
 
       <EmailDetail 
-        email={selectedEmail}
+        email={effectiveEmail}
         onDelete={async (uid: string) => {
             await deleteEmails([uid]);
             setSelectedEmail(null);
@@ -152,8 +165,10 @@ const App: React.FC = () => {
       )}
 
       <SettingsModal 
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
+        isOpen={settingsState.isOpen}
+        initialTab={settingsState.initialTab}
+        initialAction={settingsState.initialAction}
+        onClose={() => setSettingsState({ isOpen: false })}
       />
     </div>
   );

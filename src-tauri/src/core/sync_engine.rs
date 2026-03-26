@@ -3,6 +3,7 @@ use super::traits::MailClient;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 
+#[derive(Clone)]
 pub struct SyncEngine {
     db: Database,
 }
@@ -45,16 +46,31 @@ impl SyncEngine {
             .get_folders()
             .await
             .context("Failed to fetch folders from client")?;
-        for folder in folders {
+        
+        let mut remote_ids = HashSet::new();
+        for folder in &folders {
+            remote_ids.insert(folder.remote_id.clone());
             self.db
                 .upsert_folder(
                     &account_id,
                     &folder.remote_id,
                     &folder.name,
                     folder.unread_count,
+                    folder.system_role.as_deref(),
                 )
                 .await
                 .context("Failed to persist folder")?;
+        }
+
+        // Prune orphaned folders
+        let local_folders = self.db.get_folders_for_account(&account_id).await?;
+        for local in local_folders {
+            if !remote_ids.contains(&local.remote_id) {
+                println!("[Sync] Pruning orphaned folder: {} ({})", local.name, local.remote_id);
+                if let Err(e) = self.db.delete_folder(&local.id).await {
+                    crate::error!("Failed to prune folder {}: {}", local.id, e);
+                }
+            }
         }
 
         Ok(account_id)
@@ -75,19 +91,19 @@ impl SyncEngine {
             .context("Failed to fetch last UID from database")?;
 
         // 2. 抓取该 UID 之后的邮件
-        let new_emails = client
-            .get_emails_since(folder_remote_id, last_uid)
-            .await
-            .context("Failed to fetch new emails from client")?;
+        let new_emails = match client.get_emails_since(folder_remote_id, last_uid).await {
+            Ok(emails) => emails,
+            Err(e) => {
+                crate::error!("Sync failed for folder {}: {}", folder_remote_id, e);
+                return Err(e).context("Failed to fetch new emails from client");
+            }
+        };
 
         let count = new_emails.len();
 
         // 3. 存储邮件
         for email in new_emails {
-            self.db
-                .upsert_email(folder_id, &email)
-                .await
-                .context("Failed to upsert email during sync")?;
+            self.store_synced_email(folder_id, &email).await?;
         }
 
         // 更新未读数
@@ -158,10 +174,22 @@ impl SyncEngine {
         
         let count = old_emails.len();
         for email in old_emails {
-            self.db.upsert_email(folder_id, &email).await?;
+            self.store_synced_email(folder_id, &email).await?;
         }
 
         Ok(count)
+    }
+
+    async fn store_synced_email(&self, folder_id: &str, email: &super::traits::EmailSummary) -> Result<()> {
+        if let Some(msg_id) = &email.message_id {
+            if let Ok(Some(local_uid)) = self.db.find_email_by_message_id(folder_id, msg_id).await {
+                if local_uid.starts_with("local-sent-") {
+                    let _ = self.db.update_remote_id(folder_id, &local_uid, &email.uid).await;
+                }
+            }
+        }
+        self.db.upsert_email(folder_id, email).await.context("Failed to upsert email during sync")?;
+        Ok(())
     }
 }
 
@@ -228,7 +256,7 @@ mod tests {
             .await
             .unwrap();
         let folder_id = db
-            .upsert_folder(&acct_id, "INBOX", "Inbox", 0)
+            .upsert_folder(&acct_id, "INBOX", "Inbox", 0, Some("INBOX"))
             .await
             .unwrap();
 

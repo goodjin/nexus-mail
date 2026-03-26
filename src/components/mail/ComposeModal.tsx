@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Send, Paperclip } from 'lucide-react';
 import { Button } from "../ui/Button";
 import { invoke } from "../../lib/tauri";
+import { RichTextEditor } from "./RichTextEditor";
 
 interface ComposeModalProps {
   isOpen: boolean;
@@ -126,11 +127,10 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
             />
           </div>
           
-          <textarea 
-            className="flex-1 min-h-[300px] bg-transparent border-none focus:outline-none text-nexus-primary resize-none p-2 leading-relaxed text-sm"
-            placeholder="Write your message here..."
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
+          <RichTextEditor 
+            content={body} 
+            onChange={setBody} 
+            className="flex-1 min-h-[300px]"
           />
 
           {attachments.length > 0 && (

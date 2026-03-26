@@ -1,36 +1,66 @@
-import React, { useState } from 'react';
-import { X, Shield, Download, History, Users, Server, Lock, Globe } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Shield, Download, History, Users, Server, Lock, Globe, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { useSettings } from '../../hooks/useSettings';
-import { useAccounts, AccountInfo } from '../../hooks/useAccounts';
+import { useAccountContext, AccountInfo } from '../../context/AccountContext';
 import { cn } from '../../lib/utils';
+import { invoke } from '../../lib/tauri';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: 'general' | 'accounts';
+  initialAction?: 'add_account';
 }
 
 type TabType = 'general' | 'accounts';
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
+
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab = 'general', initialAction }) => {
   const { settings, updateSetting } = useSettings();
-  const { accounts, updateAccount, updatePassword } = useAccounts();
-  const [activeTab, setActiveTab] = useState<TabType>('general');
+  const { accounts, updateAccount, updatePassword } = useAccountContext();
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   
   // Account Form State
   const [editForm, setEditForm] = useState<AccountInfo | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [testError, setTestError] = useState<string | null>(null);
 
   const selectedAccount = accounts.find(a => a.id === selectedAccountId);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (selectedAccount) {
       setEditForm({ ...selectedAccount });
       setNewPassword('');
     }
   }, [selectedAccountId, selectedAccount]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setActiveTab(initialTab);
+      if (initialAction === 'add_account') {
+        setSelectedAccountId('new');
+        setEditForm({
+            id: 'new',
+            email: '',
+            display_name: 'New Account',
+            imap_host: '127.0.0.1',
+            imap_port: 993,
+            imap_use_tls: true,
+            smtp_host: '127.0.0.1',
+            smtp_port: 465,
+            smtp_use_tls: true
+        });
+        setNewPassword('');
+      } else {
+        setSelectedAccountId(null);
+        setEditForm(null);
+      }
+    }
+  }, [isOpen, initialTab, initialAction]);
 
   if (!isOpen) return null;
 
@@ -46,6 +76,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
       setTimeout(() => setSaveStatus('idle'), 2000);
     } catch (e) {
       setSaveStatus('error');
+    }
+  };
+
+  const handleTestConnection = async () => {
+    if (!editForm) return;
+    try {
+      setTestStatus('testing');
+      setTestError(null);
+      await invoke('test_account_connection', {
+        imapHost: editForm.imap_host,
+        imapPort: editForm.imap_port,
+        imapUseTls: editForm.imap_use_tls,
+        smtpHost: editForm.smtp_host,
+        smtpPort: editForm.smtp_port,
+        smtpUseTls: editForm.smtp_use_tls,
+        email: editForm.email,
+        password: newPassword || null,
+      });
+      setTestStatus('success');
+      setTimeout(() => setTestStatus('idle'), 3000);
+    } catch (e: any) {
+      setTestStatus('error');
+      setTestError(e.toString());
     }
   };
 
@@ -170,6 +223,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                   {accounts.map(acc => (
                     <button
                       key={acc.id}
+                      data-testid={`account-item-${acc.email}`}
                       onClick={() => setSelectedAccountId(acc.id)}
                       className={cn(
                         "w-full text-left px-3 py-2 rounded-lg text-sm transition-all",
@@ -182,6 +236,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                       </div>
                     </button>
                   ))}
+                  
+                  <button
+                    onClick={() => {
+                        setSelectedAccountId('new');
+                        setEditForm({
+                            id: 'new',
+                            email: '',
+                            display_name: 'New Account',
+                            imap_host: '127.0.0.1',
+                            imap_port: 993,
+                            imap_use_tls: true,
+                            smtp_host: '127.0.0.1',
+                            smtp_port: 465,
+                            smtp_use_tls: true
+                        });
+                        setNewPassword('');
+                    }}
+                    className={cn(
+                        "w-full mt-4 flex items-center justify-center gap-2 px-3 py-3 rounded-lg text-sm font-medium transition-all border border-dashed border-nexus-muted/40",
+                        selectedAccountId === 'new' 
+                            ? "bg-nexus-accent text-white border-nexus-accent shadow-md" 
+                            : "text-nexus-muted hover:bg-nexus-muted/10 hover:text-nexus-foreground"
+                    )}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+                        <line x1="12" y1="5" x2="12" y2="19" />
+                        <line x1="5" y1="12" x2="19" y2="12" />
+                    </svg>
+                    Add New Account
+                  </button>
                 </div>
               </div>
 
@@ -198,8 +282,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                       <div className="space-y-4">
                         <div className="grid grid-cols-2 gap-4">
                           <div className="space-y-1">
-                            <label className="text-xs font-semibold text-nexus-muted uppercase tracking-wider">Email (Readonly)</label>
-                            <input disabled value={editForm.email} className="w-full bg-nexus-muted/10 border p-2 rounded-lg text-nexus-muted text-sm opacity-60 cursor-not-allowed" />
+                            <label className="text-xs font-semibold text-nexus-muted uppercase tracking-wider">
+                              {selectedAccountId === 'new' ? 'Email Address' : 'Email (Readonly)'}
+                            </label>
+                            <input 
+                              type="email"
+                              disabled={selectedAccountId !== 'new'} 
+                              value={editForm.email} 
+                              onChange={e => setEditForm({...editForm, email: e.target.value})}
+                              className={cn(
+                                "w-full border p-2 rounded-lg text-sm outline-none",
+                                selectedAccountId !== 'new' 
+                                  ? "bg-nexus-muted/10 text-nexus-muted opacity-60 cursor-not-allowed"
+                                  : "bg-transparent focus:ring-2 ring-nexus-accent"
+                              )} 
+                            />
                           </div>
                           <div className="space-y-1">
                             <label className="text-xs font-semibold text-nexus-muted uppercase tracking-wider">Display Name</label>
@@ -292,17 +389,49 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                       </div>
                     </div>
 
-                    <div className="pt-4 flex items-center gap-4">
-                      <Button 
-                        variant="primary" 
-                        onClick={handleSaveAccount}
-                        disabled={saveStatus === 'saving'}
-                        className={cn("px-8", saveStatus === 'success' && "bg-green-600 hover:bg-green-700")}
-                      >
-                        {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'success' ? 'Saved!' : 'Save Changes'}
-                      </Button>
-                      {saveStatus === 'error' && <span className="text-xs text-red-500 font-medium">Failed to save. Check your input.</span>}
-                    </div>
+                      <div className="pt-4 flex items-center gap-3 flex-wrap">
+                        <Button 
+                          variant="primary" 
+                          onClick={handleSaveAccount}
+                          disabled={saveStatus === 'saving' || !editForm.email || (selectedAccountId === 'new' && !newPassword)}
+                          className={cn("px-8", saveStatus === 'success' && "bg-green-600 hover:bg-green-700")}
+                        >
+                          {saveStatus === 'saving' 
+                            ? 'Saving...' 
+                            : saveStatus === 'success' 
+                              ? 'Saved!' 
+                              : selectedAccountId === 'new' ? 'Create Account' : 'Save Changes'}
+                        </Button>
+
+                        <Button
+                          variant="ghost"
+                          onClick={handleTestConnection}
+                          disabled={testStatus === 'testing' || !editForm.email || (selectedAccountId === 'new' && !newPassword)}
+                          className={cn(
+                            "px-4 border border-nexus-muted/20 hover:bg-nexus-muted/5 flex items-center gap-2",
+                            testStatus === 'success' && "text-green-600 border-green-200 bg-green-50",
+                            testStatus === 'error' && "text-red-600 border-red-200 bg-red-50"
+                          )}
+                        >
+                          {testStatus === 'testing' ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : testStatus === 'success' ? (
+                            <CheckCircle2 className="w-4 h-4" />
+                          ) : testStatus === 'error' ? (
+                            <AlertCircle className="w-4 h-4" />
+                          ) : (
+                            <Server className="w-4 h-4" />
+                          )}
+                          {testStatus === 'testing' ? 'Testing...' : testStatus === 'success' ? 'Connection OK' : 'Test Connection'}
+                        </Button>
+
+                        {saveStatus === 'error' && <span className="text-xs text-red-500 font-medium">Failed to save. Check your input.</span>}
+                        {testStatus === 'error' && testError && (
+                          <div className="w-full mt-2 p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 animate-in fade-in slide-in-from-top-1">
+                            <strong>Test Failed:</strong> {testError}
+                          </div>
+                        )}
+                      </div>
                   </div>
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center text-nexus-muted space-y-4">
@@ -322,10 +451,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
         <footer className="p-6 border-t bg-nexus-muted/5 flex justify-end shrink-0">
           <Button onClick={onClose} variant="ghost" className="px-8 hover:bg-nexus-muted/10">
-            Cancel
-          </Button>
-          <Button onClick={onClose} variant="primary" className="px-8 bg-nexus-accent hover:bg-nexus-accent/90 ml-3">
-            Done
+            Close
           </Button>
         </footer>
       </div>

@@ -1,4 +1,4 @@
-use super::traits::{AccountInfo, EmailSummary, FolderInfo};
+use super::traits::{AccountInfo, FolderInfo};
 use anyhow::{Context, Result};
 use sqlx::{sqlite::SqlitePool, Row};
 use std::path::Path;
@@ -65,12 +65,18 @@ impl Database {
                 remote_id TEXT NOT NULL,
                 name TEXT NOT NULL,
                 unread_count INTEGER DEFAULT 0,
+                system_role TEXT,
                 UNIQUE(account_id, remote_id),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             )",
         )
         .execute(&self.pool)
         .await?;
+
+        // 兼容性：如果旧表没有 system_role 列
+        let _ = sqlx::query("ALTER TABLE folders ADD COLUMN system_role TEXT")
+            .execute(&self.pool)
+            .await;
 
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS emails (
@@ -84,6 +90,7 @@ impl Database {
                 flags TEXT DEFAULT '[]',
                 body_text TEXT,
                 body_html TEXT,
+                message_id TEXT,
                 UNIQUE(folder_id, remote_id),
                 FOREIGN KEY(folder_id) REFERENCES folders(id)
             )",
@@ -145,7 +152,7 @@ impl Database {
         smtp_use_tls: bool,
     ) -> Result<String> {
         let id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
+        let returning_id: String = sqlx::query(
             "INSERT INTO accounts (id, email, display_name, imap_host, imap_port, imap_use_tls, smtp_host, smtp_port, smtp_use_tls)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(email) DO UPDATE SET
@@ -170,7 +177,37 @@ impl Database {
         .fetch_one(&self.pool)
         .await
         .map(|row| row.get::<String, _>(0))
-        .context("Failed to upsert account")
+        .context("Failed to upsert account")?;
+
+        self.ensure_default_folders(&returning_id).await?;
+        
+        Ok(returning_id)
+    }
+
+    async fn ensure_default_folders(&self, account_id: &str) -> Result<()> {
+        let defaults = [
+            ("INBOX", "Inbox", "INBOX"),
+            ("SENT", "Sent", "SENT"),
+            ("DRAFTS", "Drafts", "DRAFTS"),
+            ("SPAM", "Spam", "SPAM"),
+            ("TRASH", "Trash", "TRASH"),
+        ];
+
+        for (remote_id, name, role) in defaults.iter() {
+            let id = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT OR IGNORE INTO folders (id, account_id, remote_id, name, unread_count, system_role) 
+                 VALUES (?, ?, ?, ?, 0, ?)",
+            )
+            .bind(&id)
+            .bind(account_id)
+            .bind(remote_id)
+            .bind(name)
+            .bind(role)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
     }
 
     pub async fn upsert_folder(
@@ -179,25 +216,77 @@ impl Database {
         remote_id: &str,
         name: &str,
         unread_count: u32,
+        system_role: Option<&str>,
     ) -> Result<String> {
-        let id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO folders (id, account_id, remote_id, name, unread_count)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(account_id, remote_id) DO UPDATE SET
-                name = excluded.name,
-                unread_count = excluded.unread_count
-             RETURNING id",
+        let existing = sqlx::query("SELECT id FROM folders WHERE account_id = ? AND remote_id = ?")
+            .bind(account_id)
+            .bind(remote_id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        if let Some(row) = existing {
+            let id: String = row.get(0);
+            sqlx::query("UPDATE folders SET name = ?, unread_count = ?, system_role = ? WHERE id = ?")
+                .bind(name)
+                .bind(unread_count as i64)
+                .bind(system_role)
+                .bind(&id)
+                .execute(&self.pool)
+                .await?;
+            Ok(id)
+        } else {
+            let id = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO folders (id, account_id, remote_id, name, unread_count, system_role) 
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(account_id)
+            .bind(remote_id)
+            .bind(name)
+            .bind(unread_count as i64)
+            .bind(system_role)
+            .execute(&self.pool)
+            .await?;
+            Ok(id)
+        }
+    }
+
+    pub async fn delete_folder(&self, folder_id: &str) -> Result<()> {
+        // Cascade delete emails (which might cascade to attachments naturally or we need to delete them)
+        // Wait, SQLite PRAGMA foreign_keys is likely enabled, but to be safe we explicitly delete.
+        sqlx::query("DELETE FROM emails WHERE folder_id = ?")
+            .bind(folder_id)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM folders WHERE id = ?")
+            .bind(folder_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn find_email_by_message_id(&self, folder_id: &str, message_id: &str) -> Result<Option<String>> {
+        let res: Option<(String,)> = sqlx::query_as(
+            "SELECT remote_id FROM emails WHERE folder_id = ? AND message_id = ?"
         )
-        .bind(&id)
-        .bind(account_id)
-        .bind(remote_id)
-        .bind(name)
-        .bind(unread_count as i64)
-        .fetch_one(&self.pool)
-        .await
-        .map(|row| row.get::<String, _>(0))
-        .context("Failed to upsert folder")
+        .bind(folder_id)
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(res.map(|r| r.0))
+    }
+
+    pub async fn update_remote_id(&self, folder_id: &str, old_remote_id: &str, new_remote_id: &str) -> Result<()> {
+        sqlx::query("UPDATE emails SET remote_id = ? WHERE folder_id = ? AND remote_id = ?")
+            .bind(new_remote_id)
+            .bind(folder_id)
+            .bind(old_remote_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn upsert_email(
@@ -210,14 +299,15 @@ impl Database {
 
         let flags_json = serde_json::to_string(&summary.flags).unwrap_or_else(|_| "[]".to_string());
         let email_id: String = sqlx::query(
-            "INSERT INTO emails (id, folder_id, remote_id, subject, sender, date, snippet, flags)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO emails (id, folder_id, remote_id, subject, sender, date, snippet, flags, message_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(folder_id, remote_id) DO UPDATE SET
                 subject = excluded.subject,
                 sender = excluded.sender,
                 date = excluded.date,
                 snippet = excluded.snippet,
-                flags = excluded.flags
+                flags = excluded.flags,
+                message_id = excluded.message_id
              RETURNING id",
         )
         .bind(&id)
@@ -228,6 +318,7 @@ impl Database {
         .bind(&summary.date)
         .bind(&summary.snippet)
         .bind(flags_json)
+        .bind(&summary.message_id)
         .fetch_one(&mut *tx)
         .await
         .map(|row| row.get::<String, _>(0))?;
@@ -249,9 +340,24 @@ impl Database {
     }
 
     pub async fn search_emails(&self, query: &str) -> Result<Vec<String>> {
+        let fts_query = query
+            .split_whitespace()
+            .map(|word| {
+                let safe_word = word.replace('\'', "''").replace('"', "");
+                format!("\"{}\"*", safe_word)
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        let fts_query = if fts_query.is_empty() {
+            String::from("*")
+        } else {
+            fts_query
+        };
+
         let rows: Vec<(String,)> =
             sqlx::query_as("SELECT id FROM emails_fts WHERE emails_fts MATCH ? ORDER BY rank")
-                .bind(query)
+                .bind(fts_query)
                 .fetch_all(&self.pool)
                 .await?;
 
@@ -301,20 +407,23 @@ impl Database {
         }))
     }
 
-    pub async fn get_folders_by_account(&self, account_id: &str) -> Result<Vec<FolderInfo>> {
-        let rows: Vec<(String, String, String, i64)> = sqlx::query_as(
-            "SELECT id, remote_id, name, unread_count FROM folders WHERE account_id = ?"
-        )
-        .bind(account_id)
-        .fetch_all(&self.pool)
-        .await?;
-        
-        Ok(rows.into_iter().map(|(id, remote_id, name, unread_count)| FolderInfo {
-            id,
-            remote_id,
-            name,
-            unread_count: unread_count as u32,
-        }).collect())
+    pub async fn get_folders_for_account(&self, account_id: &str) -> Result<Vec<FolderInfo>> {
+        let rows = sqlx::query("SELECT id, name, remote_id, unread_count, system_role FROM folders WHERE account_id = ?")
+            .bind(account_id)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut folders = Vec::new();
+        for row in rows {
+            folders.push(FolderInfo {
+                id: row.get(0),
+                name: row.get(1),
+                remote_id: row.get(2),
+                unread_count: row.get::<i64, _>(3) as u32,
+                system_role: row.get(4),
+            });
+        }
+        Ok(folders)
     }
 
     pub async fn update_folder_unread_count(&self, folder_id: &str) -> Result<()> {
@@ -362,6 +471,30 @@ impl Database {
 
         tx.commit().await?;
         Ok(())
+    }
+
+
+
+    pub async fn delete_all_folders_for_account(&self, account_id: &str) -> Result<()> {
+        // First delete all emails in those folders
+        sqlx::query("DELETE FROM emails WHERE folder_id IN (SELECT id FROM folders WHERE account_id = ?)")
+            .bind(account_id)
+            .execute(&self.pool)
+            .await?;
+        // Then delete the folders
+        sqlx::query("DELETE FROM folders WHERE account_id = ?")
+            .bind(account_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn has_any_system_roles(&self, account_id: &str) -> Result<bool> {
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM folders WHERE account_id = ? AND system_role IS NOT NULL")
+            .bind(account_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count.0 > 0)
     }
 
     pub async fn get_setting(&self, key: &str) -> Result<Option<String>> {

@@ -37,36 +37,42 @@ impl MailClient for MockMailClient {
                 name: "收件箱".into(),
                 remote_id: "INBOX".into(),
                 unread_count: 128,
+                system_role: Some("INBOX".into()),
             },
             FolderInfo {
                 id: "mock-flagged".into(),
                 name: "重要邮件".into(),
                 remote_id: "FLAGGED".into(),
                 unread_count: 999,
+                system_role: None,
             },
             FolderInfo {
                 id: "mock-drafts".into(),
                 name: "草稿箱".into(),
                 remote_id: "Drafts".into(),
                 unread_count: 2,
+                system_role: Some("DRAFTS".into()),
             },
             FolderInfo {
                 id: "mock-sent".into(),
                 name: "已发送".into(),
                 remote_id: "Sent".into(),
                 unread_count: 0,
+                system_role: Some("SENT".into()),
             },
             FolderInfo {
                 id: "mock-junk".into(),
                 name: "垃圾邮件".into(),
                 remote_id: "Junk".into(),
                 unread_count: 42,
+                system_role: Some("SPAM".into()),
             },
             FolderInfo {
                 id: "mock-nexus".into(),
                 name: "工作/项目/Nexus".into(),
                 remote_id: "Work/Nexus".into(),
                 unread_count: 0,
+                system_role: None,
             },
         ];
         Ok(folders)
@@ -88,6 +94,7 @@ impl MailClient for MockMailClient {
             date: "2026-03-20 09:15".into(),
             snippet: "关于下周的发布计划，我们需要确认以下几个核心模块的验收...".into(),
             flags: vec![],
+            message_id: None,
         });
 
         emails.push(EmailSummary {
@@ -97,6 +104,7 @@ impl MailClient for MockMailClient {
             date: "2026-03-19 22:10".into(),
             snippet: "感谢您订阅我们的高级计划。您的下一份账单将在 4 月 19 日生成...".into(),
             flags: vec!["\\Seen".to_string()],
+            message_id: None,
         });
 
         Ok(emails)
@@ -115,6 +123,7 @@ impl MailClient for MockMailClient {
             date: "2026-03-20 16:30".into(),
             snippet: "这是模拟增量同步后新抓取到的邮件体验。".into(),
             flags: vec![],
+            message_id: None,
         }])
     }
 
@@ -136,6 +145,7 @@ impl MailClient for MockMailClient {
                 date: "2025-12-01".into(),
                 snippet: "这是较早之前的历史邮件模拟。".into(),
                 flags: vec!["\\Seen".to_string()],
+                message_id: None,
             });
         }
         Ok(emails)
@@ -204,13 +214,14 @@ impl MailSender for MockMailSender {
         _subject: &str,
         _body: &str,
         attachments: Vec<String>,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<(Vec<u8>, String)> {
         println!(
             "[Mock] Sending SMTP email: {} -> {} with {} attachments",
             from,
             to,
             attachments.len()
         );
-        Ok(b"Mock MIME Message Content".to_vec())
+        let msg_id = format!("<{}@mock-send.local>", uuid::Uuid::new_v4());
+        Ok((b"Mock MIME Message Content".to_vec(), msg_id))
     }
 }

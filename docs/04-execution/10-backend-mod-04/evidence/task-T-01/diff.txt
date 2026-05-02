@@ -1,0 +1,882 @@
+diff --git a/src-tauri/src/commands.rs b/src-tauri/src/commands.rs
+index 554f4fb..3630419 100644
+--- a/src-tauri/src/commands.rs
++++ b/src-tauri/src/commands.rs
+@@ -1,12 +1,98 @@
+ use crate::core::database::Database;
+-use crate::core::traits::{self, MailClient, MailSender, EmailSummary, FolderInfo, AccountInfo};
++use crate::core::traits::{self, AccountInfo, AttachmentInfo, EmailHeader, EmailSummary, FolderInfo, MailClient, MailSender, SendEmailRequest};
+ use crate::core::imap_client::RealImapClient;
+ use crate::core::smtp_client::RealSmtpClient;
+ use crate::core::sync_engine::SyncEngine;
+ use crate::core::security::SecurityService;
+ use anyhow::Result;
++use serde::Serialize;
+ use tauri::State;
+ 
++fn validate_account_update(email: &str, imap_host: &str, smtp_host: &str) -> Result<(), String> {
++    if email.trim().is_empty() || imap_host.trim().is_empty() || smtp_host.trim().is_empty() {
++        return Err("Email, IMAP host, and SMTP host are required".to_string());
++    }
++    Ok(())
++}
++
++fn resolve_account_test_password(email: &str, password: Option<String>) -> Result<String, String> {
++    match password {
++        Some(password) if !password.trim().is_empty() => Ok(password),
++        _ => SecurityService::get_password(email)
++            .map_err(|_| "Missing password for account connection test".to_string()),
++    }
++}
++
++#[derive(Serialize)]
++pub struct AccountDiscoveryResult {
++    email: String,
++    source: String,
++    requires_confirmation: bool,
++    imap_host: String,
++    imap_port: u16,
++    imap_use_tls: bool,
++    smtp_host: String,
++    smtp_port: u16,
++    smtp_use_tls: bool,
++}
++
++#[derive(Serialize)]
++pub struct EmailListItem {
++    pub uid: String,
++    pub subject: String,
++    pub from: String,
++    pub date: String,
++    pub snippet: String,
++    pub flags: Vec<String>,
++    pub has_attachments: bool,
++}
++
++#[derive(Serialize)]
++pub struct SendEmailResponse {
++    pub message: String,
++    pub message_id: String,
++}
++
++#[derive(Serialize)]
++pub struct SendEmailError {
++    pub code: String,
++    pub message: String,
++}
++
++impl SendEmailError {
++    fn new(code: &str, message: impl Into<String>) -> Self {
++        Self {
++            code: code.to_string(),
++            message: message.into(),
++        }
++    }
++}
++
++fn normalize_recipients(values: Vec<String>) -> Vec<String> {
++    values
++        .into_iter()
++        .map(|value| value.trim().to_string())
++        .filter(|value| !value.is_empty())
++        .collect()
++}
++
++fn email_domain(email: &str) -> Result<&str, String> {
++    email
++        .split('@')
++        .nth(1)
++        .filter(|domain| !domain.trim().is_empty())
++        .ok_or_else(|| "Invalid email address for auto discovery".to_string())
++}
++
++const DETAILS_CACHE_TTL_SECS: i64 = 600;
++
++fn resolve_attachment_part_id(attachment_id: &str) -> &str {
++    attachment_id
++        .rsplit_once("::")
++        .map(|(_, part)| part)
++        .unwrap_or(attachment_id)
++}
++
+ #[tauri::command]
+ pub async fn get_accounts_detailed(db: State<'_, Database>) -> Result<Vec<AccountInfo>, String> {
+     db.get_accounts_detailed().await.map_err(|e| e.to_string())
+@@ -24,6 +110,7 @@ pub async fn update_account_details(
+     smtp_port: u16,
+     smtp_use_tls: bool,
+ ) -> Result<(), String> {
++    validate_account_update(&email, &imap_host, &smtp_host)?;
+     db.upsert_account(
+         &email,
+         display_name.as_deref(),
+@@ -60,37 +147,68 @@ pub async fn test_account_connection(
+     password: Option<String>,
+ ) -> Result<(), String> {
+     crate::info!("Testing connection for {}", email);
+-    
+-    let pass = password.unwrap_or_else(|| {
+-        SecurityService::get_password(&email).unwrap_or_default()
+-    });
++    let pass = resolve_account_test_password(&email, password)?;
+ 
+     // 1. 测试 IMAP
+     let mut imap_client = RealImapClient::new(&imap_host, imap_port, &email, imap_use_tls);
+-    if let Err(e) = imap_client.connect().await {
+-        return Err(format!("IMAP Connection Failed: {}", e));
+-    }
+-    if let Err(e) = imap_client.login(&email, &pass).await {
+-        return Err(format!("IMAP Login Failed: {}", e));
+-    }
++    imap_client
++        .connect()
++        .await
++        .map_err(|e| format!("IMAP Connection Failed: {}", e))?;
++    imap_client
++        .login(&email, &pass)
++        .await
++        .map_err(|e| format!("IMAP Login Failed: {}", e))?;
+     crate::info!("IMAP test success for {}", email);
+ 
+     // 2. 测试 SMTP
+     let smtp_client = RealSmtpClient::new(&smtp_host, smtp_port, smtp_use_tls);
+-    // RealSmtpClient 目前没有显式的 connect 接口，但在发送时会连接。
+-    // 为了测试，我们可以尝试建立一个 TCP 连接。
+-    if smtp_use_tls {
+-        let connector = native_tls::TlsConnector::builder().build().map_err(|e| e.to_string())?;
+-        let stream = std::net::TcpStream::connect((smtp_host.as_str(), smtp_port)).map_err(|e| format!("SMTP TCP Connect Failed: {}", e))?;
+-        let _ = connector.connect(&smtp_host, stream).map_err(|e| format!("SMTP TLS Handshake Failed: {}", e))?;
+-    } else {
+-        let _ = std::net::TcpStream::connect((smtp_host.as_str(), smtp_port)).map_err(|e| format!("SMTP TCP Connect Failed: {}", e))?;
+-    }
++    smtp_client
++        .test_connectivity()
++        .map_err(|e| format!("SMTP Connection Failed: {}", e))?;
+     crate::info!("SMTP test success for {}", email);
+ 
+     Ok(())
+ }
+ 
++#[tauri::command]
++pub async fn discover_account_settings(
++    db: State<'_, Database>,
++    email: String,
++) -> Result<AccountDiscoveryResult, String> {
++    let domain = email_domain(&email)?.to_string();
++
++    if let Some(existing) = db
++        .find_account_by_domain(&domain)
++        .await
++        .map_err(|e| e.to_string())?
++    {
++        return Ok(AccountDiscoveryResult {
++            email,
++            source: "existing-account-domain".to_string(),
++            requires_confirmation: false,
++            imap_host: existing.imap_host,
++            imap_port: existing.imap_port as u16,
++            imap_use_tls: existing.imap_use_tls,
++            smtp_host: existing.smtp_host,
++            smtp_port: existing.smtp_port as u16,
++            smtp_use_tls: existing.smtp_use_tls,
++        });
++    }
++
++    Ok(AccountDiscoveryResult {
++        email,
++        source: "placeholder-domain-rule".to_string(),
++        requires_confirmation: true,
++        imap_host: format!("imap.{}", domain),
++        imap_port: 993,
++        imap_use_tls: true,
++        smtp_host: format!("smtp.{}", domain),
++        smtp_port: 465,
++        smtp_use_tls: true,
++    })
++}
++
+ #[tauri::command]
+ pub async fn list_accounts(db: State<'_, Database>) -> Result<Vec<String>, String> {
+     sqlx::query_as::<sqlx::Sqlite, (String,)>("SELECT email FROM accounts")
+@@ -197,6 +315,39 @@ pub async fn sync_account(
+     }
+ }
+ 
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn test_resolve_account_test_password_from_argument() {
++        let password = resolve_account_test_password("demo@nexus-mail.com", Some("secret".to_string()))
++            .unwrap();
++        assert_eq!(password, "secret");
++    }
++
++    #[test]
++    fn test_resolve_account_test_password_requires_existing_secret() {
++        let email = "missing-password@nexus-mail.local";
++        SecurityService::delete_password(email).ok();
++
++        let err = resolve_account_test_password(email, None).unwrap_err();
++        assert!(err.contains("Missing password"));
++    }
++
++    #[test]
++    fn test_email_domain_validation() {
++        assert_eq!(email_domain("demo@example.com").unwrap(), "example.com");
++        assert!(email_domain("invalid-email").is_err());
++    }
++
++    #[test]
++    fn test_resolve_attachment_part_id() {
++        assert_eq!(resolve_attachment_part_id("email-123::1.2"), "1.2");
++        assert_eq!(resolve_attachment_part_id("1.3"), "1.3");
++    }
++}
++
+ #[tauri::command]
+ pub async fn get_email_details(
+     db: State<'_, Database>,
+@@ -210,15 +361,68 @@ pub async fn get_email_details(
+         .map_err(|e| e.to_string())?
+         .ok_or_else(|| "Account not found".to_string())?;
+ 
+-    let password = SecurityService::get_password(&account_email)
+-        .map_err(|e: anyhow::Error| e.to_string())?;
+-
+     let folder_row: (String,) = sqlx::query_as("SELECT remote_id FROM folders WHERE id = ?")
+         .bind(&folder_id)
+         .fetch_one(&db.pool)
+         .await
+         .map_err(|e| e.to_string())?;
+ 
++    let cached_row: Option<(String, Option<String>, Option<String>, Option<String>, Option<i64>)> =
++        sqlx::query_as(
++            "SELECT id, body_html, body_text, headers, detail_cached_at
++             FROM emails
++             WHERE folder_id = ? AND remote_id = ?",
++        )
++        .bind(&folder_id)
++        .bind(&uid)
++        .fetch_optional(&db.pool)
++        .await
++        .map_err(|e| e.to_string())?;
++    let email_id = cached_row.as_ref().map(|row| row.0.clone());
++    let now = chrono::Utc::now().timestamp();
++
++    if let Some((email_id, body_html, body_text, headers_json, cached_at)) = cached_row.as_ref() {
++        if let Some(cached_at) = cached_at {
++            let is_fresh = now.saturating_sub(*cached_at) <= DETAILS_CACHE_TTL_SECS;
++            if is_fresh && (body_html.is_some() || body_text.is_some()) && headers_json.is_some() {
++                let headers: Vec<EmailHeader> = headers_json
++                    .as_ref()
++                    .and_then(|json| serde_json::from_str(json).ok())
++                    .unwrap_or_default();
++                let attachments = sqlx::query_as::<sqlx::Sqlite, (String, String, String, i64, Option<String>, i64)>(
++                    "SELECT id, filename, mime_type, size, content_id, is_inline
++                     FROM attachments
++                     WHERE email_id = ?",
++                )
++                .bind(email_id)
++                .fetch_all(&db.pool)
++                .await
++                .map_err(|e| e.to_string())?
++                .into_iter()
++                .map(|(id, filename, mime_type, size, content_id, is_inline)| AttachmentInfo {
++                    id,
++                    filename,
++                    mime_type,
++                    size: size as usize,
++                    content_id,
++                    is_inline: is_inline != 0,
++                })
++                .collect();
++
++                return Ok(traits::EmailDetails {
++                    uid: uid.clone(),
++                    body_html: body_html.clone(),
++                    body_text: body_text.clone(),
++                    attachments,
++                    headers,
++                });
++            }
++        }
++    }
++
++    let password = SecurityService::get_password(&account_email)
++        .map_err(|e: anyhow::Error| e.to_string())?;
++
+     let mut client = RealImapClient::new(
+         &account.imap_host,
+         account.imap_port as u16,
+@@ -237,7 +441,78 @@ pub async fn get_email_details(
+         .await
+         .map_err(|e| e.to_string())?;
+ 
+-    Ok(details)
++    let traits::EmailDetails {
++        uid,
++        body_html,
++        body_text,
++        attachments: raw_attachments,
++        headers,
++    } = details;
++
++    let attachments = if let Some(email_id) = email_id {
++        let headers_json = serde_json::to_string(&headers).unwrap_or_else(|_| "[]".to_string());
++        if let Err(e) = sqlx::query(
++            "UPDATE emails SET body_html = ?, body_text = ?, headers = ?, detail_cached_at = ? WHERE id = ?",
++        )
++        .bind(&body_html)
++        .bind(&body_text)
++        .bind(&headers_json)
++        .bind(now)
++        .bind(&email_id)
++        .execute(&db.pool)
++        .await
++        {
++            crate::error!("Failed to cache email details {}: {}", uid, e);
++        }
++
++        if let Err(e) = sqlx::query("DELETE FROM attachments WHERE email_id = ?")
++            .bind(&email_id)
++            .execute(&db.pool)
++            .await
++        {
++            crate::error!("Failed to reset attachments for {}: {}", uid, e);
++        }
++
++        let mut attachments = Vec::with_capacity(raw_attachments.len());
++        for attachment in raw_attachments {
++            let composite_id = format!("{}::{}", email_id, attachment.id);
++            if let Err(e) = sqlx::query(
++                "INSERT INTO attachments (id, email_id, filename, mime_type, size, content_id, is_inline)
++                 VALUES (?, ?, ?, ?, ?, ?, ?)",
++            )
++            .bind(&composite_id)
++            .bind(&email_id)
++            .bind(&attachment.filename)
++            .bind(&attachment.mime_type)
++            .bind(attachment.size as i64)
++            .bind(&attachment.content_id)
++            .bind(attachment.is_inline)
++            .execute(&db.pool)
++            .await
++            {
++                crate::error!("Failed to cache attachment {}: {}", uid, e);
++            }
++            attachments.push(AttachmentInfo {
++                id: composite_id,
++                filename: attachment.filename,
++                mime_type: attachment.mime_type,
++                size: attachment.size,
++                content_id: attachment.content_id,
++                is_inline: attachment.is_inline,
++            });
++        }
++        attachments
++    } else {
++        raw_attachments
++    };
++
++    Ok(traits::EmailDetails {
++        uid,
++        body_html,
++        body_text,
++        attachments,
++        headers,
++    })
+ }
+ 
+ #[tauri::command]
+@@ -247,10 +522,20 @@ pub async fn get_folders(
+ ) -> Result<Vec<FolderInfo>, String> {
+     sqlx::query_as::<sqlx::Sqlite, (String, String, String, i64, Option<String>)>(
+         "
+-        SELECT folders.id, remote_id, name, unread_count, system_role 
+-        FROM folders 
+-        JOIN accounts ON folders.account_id = accounts.id 
+-        WHERE accounts.email = ?",
++        SELECT folders.id, remote_id, name, unread_count, system_role
++        FROM folders
++        JOIN accounts ON folders.account_id = accounts.id
++        WHERE accounts.email = ?
++        ORDER BY CASE UPPER(system_role)
++            WHEN 'INBOX' THEN 0
++            WHEN 'SENT' THEN 1
++            WHEN 'DRAFTS' THEN 2
++            WHEN 'SPAM' THEN 3
++            WHEN 'TRASH' THEN 4
++            WHEN 'ARCHIVE' THEN 5
++            ELSE 6
++        END,
++        LOWER(name)",
+     )
+     .bind(account_email)
+     .fetch_all(&db.pool)
+@@ -275,32 +560,39 @@ pub async fn get_emails(
+     folder_id: String,
+     limit: u32,
+     offset: u32,
+-) -> Result<Vec<EmailSummary>, String> {
+-    sqlx::query_as::<sqlx::Sqlite, (String, String, String, String, String, String)>(
++) -> Result<Vec<EmailListItem>, String> {
++    let page_limit = if limit == 0 { 50 } else { limit.min(50) };
++    sqlx::query_as::<sqlx::Sqlite, (String, String, String, String, String, String, i64)>(
+         "
+-        SELECT remote_id, subject, sender, date, snippet, flags 
+-        FROM emails 
++        SELECT remote_id, subject, sender, date, snippet, flags,
++            EXISTS(SELECT 1 FROM attachments WHERE attachments.email_id = emails.id) AS has_attachments
++        FROM emails
+         WHERE folder_id = ? 
+-        ORDER BY CAST(remote_id AS INTEGER) DESC 
++        ORDER BY
++            CASE
++                WHEN remote_id != '' AND remote_id NOT GLOB '*[^0-9]*' THEN CAST(remote_id AS INTEGER)
++                ELSE NULL
++            END DESC,
++            id DESC
+         LIMIT ? OFFSET ?",
+     )
+     .bind(folder_id)
+-    .bind(limit as i64)
++    .bind(page_limit as i64)
+     .bind(offset as i64)
+     .fetch_all(&db.pool)
+     .await
+     .map(|rows| {
+         rows.into_iter()
+-            .map(|(uid, subject, from, date, snippet, flags_json)| {
++            .map(|(uid, subject, from, date, snippet, flags_json, has_attachments)| {
+                 let flags = serde_json::from_str(&flags_json).unwrap_or_default();
+-                EmailSummary {
++                EmailListItem {
+                     uid,
+                     subject,
+                     from,
+                     date,
+                     snippet,
+                     flags,
+-                    message_id: None,
++                    has_attachments: has_attachments != 0,
+                 }
+             })
+             .collect()
+@@ -364,19 +656,25 @@ pub async fn search_emails(
+ #[tauri::command]
+ pub async fn send_email(
+     db: State<'_, Database>,
+-    from: String,
+-    to: String,
+-    subject: String,
+-    body: String,
+-    attachments: Option<Vec<String>>,
+-) -> Result<String, String> {
++    mut request: SendEmailRequest,
++) -> Result<SendEmailResponse, SendEmailError> {
++    request.to = normalize_recipients(request.to);
++    request.cc = normalize_recipients(request.cc);
++    request.bcc = normalize_recipients(request.bcc);
++    request.attachments = normalize_recipients(request.attachments);
++
++    if request.to.is_empty() && request.cc.is_empty() && request.bcc.is_empty() {
++        return Err(SendEmailError::new(
++            "missing_recipient",
++            "At least one recipient is required",
++        ));
++    }
++
+     let account = db
+-        .get_account_by_email(&from)
++        .get_account_by_email(&request.from)
+         .await
+-        .map_err(|e| e.to_string())?
+-        .ok_or_else(|| "Account not found".to_string())?;
+-
+-    let attachments = attachments.unwrap_or_default();
++        .map_err(|e| SendEmailError::new("account_lookup_failed", e.to_string()))?
++        .ok_or_else(|| SendEmailError::new("account_not_found", "Account not found"))?;
+ 
+     let smtp_client = RealSmtpClient::new(
+         &account.smtp_host, 
+@@ -384,10 +682,10 @@ pub async fn send_email(
+         account.smtp_use_tls
+     );
+ 
+-    let (_, msg_id_val) = smtp_client
+-        .send_email(&from, &to, &subject, &body, attachments)
++    let result = smtp_client
++        .send_email(&request)
+         .await
+-        .map_err(|e: anyhow::Error| format!("SMTP Error: {}", e))?;
++        .map_err(|e: anyhow::Error| SendEmailError::new("smtp_error", e.to_string()))?;
+ 
+     // Save to local Sent folder
+     if let Ok(folders) = db.get_folders_for_account(&account.id).await {
+@@ -395,18 +693,24 @@ pub async fn send_email(
+             let local_uid = format!("local-sent-{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
+             let summary = crate::core::traits::EmailSummary {
+                 uid: local_uid,
+-                subject: subject.clone(),
+-                from: from.clone(),
++                subject: request.subject.clone(),
++                from: request.from.clone(),
+                 date: chrono::Local::now().to_rfc2822(),
+-                snippet: body.chars().take(100).collect(),
++                snippet: request.body.chars().take(100).collect(),
+                 flags: vec!["\\Seen".to_string()],
+-                message_id: Some(msg_id_val),
++                message_id: Some(result.message_id.clone()),
+             };
+             let _ = db.upsert_email(&sent_folder.id, &summary).await;
+         }
+     }
+ 
+-    Ok(format!("Email sent to {} successfully (local save only)", to))
++    Ok(SendEmailResponse {
++        message: format!(
++            "Email sent to {} successfully (local save only)",
++            request.to.join(", ")
++        ),
++        message_id: result.message_id,
++    })
+ }
+ 
+ #[tauri::command]
+@@ -445,8 +749,10 @@ pub async fn get_attachment(
+         .await
+         .map_err(|e| e.to_string())?;
+ 
++    let part_id = resolve_attachment_part_id(&attachment_id);
++
+     let data = client
+-        .get_attachment(&folder_row.0, &uid, &attachment_id)
++        .get_attachment(&folder_row.0, &uid, part_id)
+         .await
+         .map_err(|e| e.to_string())?;
+ 
+@@ -564,10 +870,7 @@ pub async fn delete_email(
+         .await
+         .map_err(|e| e.to_string())?;
+ 
+-    sqlx::query("DELETE FROM emails WHERE folder_id = ? AND remote_id = ?")
+-        .bind(&folder_id)
+-        .bind(&uid)
+-        .execute(&db.pool)
++    db.delete_email_by_uid(&folder_id, &uid)
+         .await
+         .map_err(|e| e.to_string())?;
+ 
+@@ -640,12 +943,3 @@ pub async fn dev_seed_data(db: State<'_, Database>) -> Result<String, String> {
+ 
+     Ok("Seed data injected!".into())
+ }
+-
+-#[cfg(test)]
+-mod tests {
+-
+-    #[tokio::test]
+-    async fn test_get_accounts() {
+-        // Mock tests here if needed
+-    }
+-}
+diff --git a/src-tauri/src/core/mock_client.rs b/src-tauri/src/core/mock_client.rs
+index 9a6a2ff..4cde5c2 100644
+--- a/src-tauri/src/core/mock_client.rs
++++ b/src-tauri/src/core/mock_client.rs
+@@ -1,4 +1,4 @@
+-use super::traits::{EmailDetails, EmailSummary, FolderInfo, MailClient, MailSender};
++use super::traits::{EmailDetails, EmailSummary, FolderInfo, MailClient, MailSender, SendEmailRequest, SendEmailResult};
+ use anyhow::Result;
+ use async_trait::async_trait;
+ 
+@@ -161,7 +161,19 @@ impl MailClient for MockMailClient {
+                 filename: "welcome.pdf".to_string(),
+                 mime_type: "application/pdf".to_string(),
+                 size: 1024 * 1024,
++                content_id: None,
++                is_inline: false,
+             }],
++            headers: vec![
++                super::traits::EmailHeader {
++                    name: "From".to_string(),
++                    value: "mock@example.com".to_string(),
++                },
++                super::traits::EmailHeader {
++                    name: "Subject".to_string(),
++                    value: "Mock Detail".to_string(),
++                },
++            ],
+         })
+     }
+ 
+@@ -207,21 +219,17 @@ pub struct MockMailSender;
+ 
+ #[async_trait]
+ impl MailSender for MockMailSender {
+-    async fn send_email(
+-        &self,
+-        from: &str,
+-        to: &str,
+-        _subject: &str,
+-        _body: &str,
+-        attachments: Vec<String>,
+-    ) -> Result<(Vec<u8>, String)> {
++    async fn send_email(&self, request: &SendEmailRequest) -> Result<SendEmailResult> {
+         println!(
+             "[Mock] Sending SMTP email: {} -> {} with {} attachments",
+-            from,
+-            to,
+-            attachments.len()
++            request.from,
++            request.to.join(","),
++            request.attachments.len()
+         );
+         let msg_id = format!("<{}@mock-send.local>", uuid::Uuid::new_v4());
+-        Ok((b"Mock MIME Message Content".to_vec(), msg_id))
++        Ok(SendEmailResult {
++            raw: b"Mock MIME Message Content".to_vec(),
++            message_id: msg_id,
++        })
+     }
+ }
+diff --git a/src-tauri/src/core/smtp_client.rs b/src-tauri/src/core/smtp_client.rs
+index 40a89e4..1f1e0c5 100644
+--- a/src-tauri/src/core/smtp_client.rs
++++ b/src-tauri/src/core/smtp_client.rs
+@@ -1,4 +1,4 @@
+-use super::traits::MailSender;
++use super::traits::{MailSender, SendEmailRequest, SendEmailResult};
+ use anyhow::{Context, Result};
+ use async_trait::async_trait;
+ use lettre::{transport::smtp::authentication::Credentials, Message, SmtpTransport, Transport, transport::smtp::client::Tls};
+@@ -17,42 +17,59 @@ impl RealSmtpClient {
+             use_tls,
+         }
+     }
++
++    pub fn test_connectivity(&self) -> Result<()> {
++        let stream = std::net::TcpStream::connect((self.host.as_str(), self.port))?;
++        if self.use_tls {
++            let connector = native_tls::TlsConnector::builder().build()?;
++            let _ = connector.connect(&self.host, stream)?;
++        }
++        Ok(())
++    }
+ }
+ 
+ #[async_trait]
+ impl MailSender for RealSmtpClient {
+-    async fn send_email(
+-        &self,
+-        from: &str,
+-        to: &str,
+-        subject: &str,
+-        body: &str,
+-        attachments: Vec<String>,
+-    ) -> Result<(Vec<u8>, String)> {
++    async fn send_email(&self, request: &SendEmailRequest) -> Result<SendEmailResult> {
+         use lettre::message::{Attachment, MultiPart, SinglePart, header::ContentType, header::MessageId};
+ 
+-        let password = crate::core::security::SecurityService::get_password(from)
++        let password = crate::core::security::SecurityService::get_password(&request.from)
+             .context("Failed to get password for SMTP")?;
+ 
+         let raw_msg_id = uuid::Uuid::new_v4().to_string();
+-        let msg_id_domain = from.split('@').nth(1).unwrap_or("nexus-mail.local");
++        let msg_id_domain = request
++            .from
++            .split('@')
++            .nth(1)
++            .unwrap_or("nexus-mail.local");
+         let msg_id_val = format!("<{}@{}>", raw_msg_id, msg_id_domain);
+ 
+-        let builder = Message::builder()
+-            .from(from.parse()?)
+-            .to(to.parse()?)
+-            .subject(subject)
++        let mut builder = Message::builder()
++            .from(request.from.parse()?)
++            .subject(&request.subject)
+             .message_id(Some(msg_id_val.clone()));
+ 
+-        let email = if attachments.is_empty() {
+-            builder.header(ContentType::TEXT_PLAIN).body(body.to_string())?
++        for recipient in &request.to {
++            builder = builder.to(recipient.parse()?);
++        }
++        for recipient in &request.cc {
++            builder = builder.cc(recipient.parse()?);
++        }
++        for recipient in &request.bcc {
++            builder = builder.bcc(recipient.parse()?);
++        }
++
++        let email = if request.attachments.is_empty() {
++            builder
++                .header(ContentType::TEXT_PLAIN)
++                .body(request.body.to_string())?
+         } else {
+             let mut multipart = MultiPart::mixed()
+                 .singlepart(SinglePart::builder()
+                     .header(ContentType::TEXT_PLAIN)
+-                    .body(body.to_string()));
++                    .body(request.body.to_string()));
+ 
+-            for path in attachments {
++            for path in &request.attachments {
+                 let path_buf = std::path::Path::new(&path);
+                 let filename = path_buf.file_name()
+                     .and_then(|fs| fs.to_str())
+@@ -73,7 +90,7 @@ impl MailSender for RealSmtpClient {
+             builder.multipart(multipart)?
+         };
+ 
+-        let creds = Credentials::new(from.to_string(), password);
++        let creds = Credentials::new(request.from.to_string(), password);
+ 
+         let mut mailer_builder = SmtpTransport::relay(&self.host)?
+             .port(self.port)
+@@ -89,7 +106,10 @@ impl MailSender for RealSmtpClient {
+             .send(&email)
+             .map_err(|e| anyhow::anyhow!("SMTP Error: {}", e))?;
+ 
+-        Ok((email.formatted(), msg_id_val))
++        Ok(SendEmailResult {
++            raw: email.formatted(),
++            message_id: msg_id_val,
++        })
+     }
+ }
+ 
+@@ -98,6 +118,8 @@ mod tests {
+     use super::*;
+     use crate::core::test_servers::MockServers;
+     use crate::core::security::SecurityService;
++    use std::io::Read;
++    use std::net::TcpListener;
+     use std::thread;
+     use std::time::Duration;
+ 
+@@ -117,13 +139,16 @@ mod tests {
+         SecurityService::set_password(from, "pass").unwrap();
+ 
+         // 4. 发送邮件
+-        let result = client.send_email(
+-            from,
+-            "receiver@test.com",
+-            "Test Subject",
+-            "Test Body",
+-            vec![]
+-        ).await;
++        let request = SendEmailRequest {
++            from: from.to_string(),
++            to: vec!["receiver@test.com".to_string()],
++            cc: vec![],
++            bcc: vec![],
++            subject: "Test Subject".to_string(),
++            body: "Test Body".to_string(),
++            attachments: vec![],
++        };
++        let result = client.send_email(&request).await;
+ 
+         assert!(result.is_ok(), "Sending should succeed when password is set: {:?}", result.err());
+     }
+@@ -134,9 +159,33 @@ mod tests {
+         let from = "unknown@test.com";
+         SecurityService::delete_password(from).ok();
+ 
+-        let result = client.send_email(from, "to@test.com", "sub", "body", vec![]).await;
++        let request = SendEmailRequest {
++            from: from.to_string(),
++            to: vec!["to@test.com".to_string()],
++            cc: vec![],
++            bcc: vec![],
++            subject: "sub".to_string(),
++            body: "body".to_string(),
++            attachments: vec![],
++        };
++        let result = client.send_email(&request).await;
+         assert!(result.is_err());
+         let err_msg = format!("{:?}", result.unwrap_err());
+         assert!(err_msg.contains("Password not found"));
+     }
++
++    #[test]
++    fn test_smtp_connectivity_fails_on_tls_mismatch() {
++        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
++        let port = listener.local_addr().unwrap().port();
++        thread::spawn(move || {
++            if let Ok((mut stream, _)) = listener.accept() {
++                let mut buf = [0u8; 8];
++                let _ = stream.read(&mut buf);
++            }
++        });
++
++        let client = RealSmtpClient::new("127.0.0.1", port, true);
++        assert!(client.test_connectivity().is_err());
++    }
+ }
+diff --git a/src-tauri/src/core/traits.rs b/src-tauri/src/core/traits.rs
+index a23d2da..ca3bc31 100644
+--- a/src-tauri/src/core/traits.rs
++++ b/src-tauri/src/core/traits.rs
+@@ -41,6 +41,13 @@ pub struct EmailDetails {
+     pub body_html: Option<String>,
+     pub body_text: Option<String>,
+     pub attachments: Vec<AttachmentInfo>,
++    pub headers: Vec<EmailHeader>,
++}
++
++#[derive(Debug, Serialize, Deserialize, Clone)]
++pub struct EmailHeader {
++    pub name: String,
++    pub value: String,
+ }
+ 
+ #[derive(Debug, Serialize, Deserialize, Clone)]
+@@ -49,6 +56,28 @@ pub struct AttachmentInfo {
+     pub filename: String,
+     pub mime_type: String,
+     pub size: usize,
++    pub content_id: Option<String>,
++    pub is_inline: bool,
++}
++
++#[derive(Debug, Serialize, Deserialize, Clone)]
++pub struct SendEmailRequest {
++    pub from: String,
++    pub to: Vec<String>,
++    #[serde(default)]
++    pub cc: Vec<String>,
++    #[serde(default)]
++    pub bcc: Vec<String>,
++    pub subject: String,
++    pub body: String,
++    #[serde(default)]
++    pub attachments: Vec<String>,
++}
++
++#[derive(Debug, Serialize, Deserialize, Clone)]
++pub struct SendEmailResult {
++    pub raw: Vec<u8>,
++    pub message_id: String,
+ }
+ 
+ #[async_trait]
+@@ -75,12 +104,5 @@ pub trait MailClient: Send + Sync {
+ 
+ #[async_trait]
+ pub trait MailSender: Send + Sync {
+-    async fn send_email(
+-        &self,
+-        from: &str,
+-        to: &str,
+-        subject: &str,
+-        body: &str,
+-        attachments: Vec<String>,
+-    ) -> Result<(Vec<u8>, String)>;
++    async fn send_email(&self, request: &SendEmailRequest) -> Result<SendEmailResult>;
+ }

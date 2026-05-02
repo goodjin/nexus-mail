@@ -1,0 +1,3 @@
+npx playwright test e2e/compose.spec.ts -g "should prefill reply and forward content"
+
+Result: PASS (1 test)

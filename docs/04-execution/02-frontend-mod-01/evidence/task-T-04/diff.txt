@@ -1,0 +1,140 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index ad17e86..dd4f59f 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -34,6 +34,10 @@ const App: React.FC = () => {
+   } = useMailbox(selectedAccount);
+ 
+   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
++
++  useEffect(() => {
++    setSelectedEmail(null);
++  }, [selectedAccount]);
+   
+   // Sync selectedEmail with the emails array if it was updated by pre-fetch
+   const effectiveEmail = React.useMemo(() => {
+diff --git a/src/components/layout/Sidebar.tsx b/src/components/layout/Sidebar.tsx
+index feb8b60..3f72f26 100644
+--- a/src/components/layout/Sidebar.tsx
++++ b/src/components/layout/Sidebar.tsx
+@@ -1,8 +1,8 @@
+-import React from "react";
++import React, { useEffect, useState } from "react";
+ import { Folder } from "../../hooks/useMailbox";
+ import { Button } from "../ui/Button";
+ import { Badge } from "../ui/Badge";
+-import { RefreshCw, Mail, Inbox, Archive, Trash2, Settings, FileText, AlertOctagon } from "lucide-react";
++import { RefreshCw, Mail, Inbox, Archive, Trash2, Settings, FileText, AlertOctagon, Loader2 } from "lucide-react";
+ import { cn } from "../../lib/utils";
+ 
+ interface SidebarProps {
+@@ -32,6 +32,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
+   onSettings,
+   onAddAccount,
+ }) => {
++  const [switchingAccount, setSwitchingAccount] = useState<string | null>(null);
++
++  useEffect(() => {
++    if (switchingAccount && selectedAccount === switchingAccount) {
++      const timer = setTimeout(() => setSwitchingAccount(null), 500);
++      return () => clearTimeout(timer);
++    }
++  }, [selectedAccount, switchingAccount]);
++
+   return (
+     <aside className="h-full flex flex-shrink-0 bg-nexus-sidebar/90 backdrop-blur-md border-r">
+       {/* Account Bar (Spark-style) */}
+@@ -39,10 +48,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
+         {accounts.map((acc) => {
+           const initials = acc.substring(0, 2).toUpperCase();
+           const isActive = selectedAccount === acc;
++          const isSwitching = switchingAccount === acc;
+           return (
+             <button
+               key={acc}
+-              onClick={() => onAccountChange(acc)}
++              onClick={() => {
++                if (acc === selectedAccount) return;
++                setSwitchingAccount(acc);
++                onAccountChange(acc);
++              }}
+               title={acc}
+               className={cn(
+                 "w-10 h-10 rounded-xl flex items-center justify-center text-xs font-bold transition-all duration-200 relative group shadow-sm",
+@@ -51,7 +65,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
+                   : "bg-white/10 text-nexus-muted hover:bg-white/20 hover:text-nexus-foreground"
+               )}
+             >
+-              {initials}
++              {isSwitching ? <Loader2 className="w-4 h-4 animate-spin" /> : initials}
+               {/* Active Indicator Dot */}
+               {isActive && (
+                 <div className="absolute -left-3 top-1/2 -translate-y-1/2 w-1 h-4 bg-nexus-accent rounded-r-full" />
+diff --git a/src/context/AccountContext.tsx b/src/context/AccountContext.tsx
+index 7e75380..ac0f5ba 100644
+--- a/src/context/AccountContext.tsx
++++ b/src/context/AccountContext.tsx
+@@ -14,6 +14,15 @@ export interface AccountInfo {
+   smtp_use_tls: boolean;
+ }
+ 
++export interface AccountDiscoveryResult {
++  imap_host?: string;
++  imap_port?: number;
++  imap_use_tls?: boolean;
++  smtp_host?: string;
++  smtp_port?: number;
++  smtp_use_tls?: boolean;
++}
++
+ interface AccountContextType {
+   accounts: AccountInfo[];
+   selectedAccount: string | null;
+@@ -22,6 +31,7 @@ interface AccountContextType {
+   refreshAccounts: () => Promise<void>;
+   updateAccount: (details: AccountInfo) => Promise<void>;
+   updatePassword: (email: string, pass: string) => Promise<void>;
++  discoverAccountSettings: (email: string) => Promise<AccountDiscoveryResult | null>;
+ }
+ 
+ const AccountContext = createContext<AccountContextType | undefined>(undefined);
+@@ -36,7 +46,12 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
+       setLoading(true);
+       const data = await invoke('get_accounts_detailed') as AccountInfo[];
+       setAccounts(data);
+-      if (data.length > 0 && !selectedAccount) {
++      if (data.length === 0) {
++        setSelectedAccount(null);
++        return;
++      }
++      const stillExists = data.some((account) => account.email === selectedAccount);
++      if (!selectedAccount || !stillExists) {
+         setSelectedAccount(data[0].email);
+       }
+     } catch (error) {
+@@ -68,6 +83,15 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
+     await invoke('update_account_password', { email, password });
+   };
+ 
++  const discoverAccountSettings = async (email: string) => {
++    try {
++      return await invoke('discover_account_settings', { email }) as AccountDiscoveryResult;
++    } catch (error) {
++      console.error('Failed to discover account settings:', error);
++      throw error;
++    }
++  };
++
+   return (
+     <AccountContext.Provider value={{ 
+       accounts, 
+@@ -76,7 +100,8 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
+       loading, 
+       refreshAccounts: fetchAccounts,
+       updateAccount,
+-      updatePassword
++      updatePassword,
++      discoverAccountSettings
+     }}>
+       {children}
+     </AccountContext.Provider>

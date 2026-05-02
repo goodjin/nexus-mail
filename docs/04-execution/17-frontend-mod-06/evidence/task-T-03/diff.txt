@@ -1,0 +1,51 @@
+--- docs/04-execution/17-frontend-mod-06/evidence/task-T-03/before/App.tsx	2026-04-27 15:34:32
++++ docs/04-execution/17-frontend-mod-06/evidence/task-T-03/after/App.tsx	2026-04-27 15:35:02
+@@ -148,6 +148,48 @@
+       setSyncStatus({ type: "error", message: `Sync failed: ${message}` });
+     }
+   };
++
++  const focusSearchInput = React.useCallback(() => {
++    if (typeof document === "undefined") return;
++    const input = document.querySelector<HTMLInputElement>('[data-testid="search-input"]');
++    if (input) {
++      input.focus();
++      input.select();
++    }
++  }, []);
++
++  const isEditableTarget = (target: EventTarget | null) => {
++    if (!(target instanceof HTMLElement)) return false;
++    const tag = target.tagName.toLowerCase();
++    return tag === "input" || tag === "textarea" || target.isContentEditable;
++  };
++
++  useEffect(() => {
++    const handleKeydown = (event: KeyboardEvent) => {
++      const modKey = event.metaKey || event.ctrlKey;
++      if (!modKey || isEditableTarget(event.target)) return;
++      const key = event.key.toLowerCase();
++      if (key === "n") {
++        event.preventDefault();
++        setComposePreset(undefined);
++        setIsComposeOpen(true);
++      }
++      if (key === "k") {
++        event.preventDefault();
++        focusSearchInput();
++      }
++      if (key === ",") {
++        event.preventDefault();
++        setSettingsState({ isOpen: true, initialTab: 'general' });
++      }
++      if (key === "s" && event.shiftKey) {
++        event.preventDefault();
++        handleSync();
++      }
++    };
++    window.addEventListener("keydown", handleKeydown);
++    return () => window.removeEventListener("keydown", handleKeydown);
++  }, [focusSearchInput, handleSync]);
+ 
+   const currentFolder = folders.find(f => f.id === selectedFolderId);
+ 

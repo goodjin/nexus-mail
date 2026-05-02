@@ -1,0 +1,182 @@
+diff --git a/src/components/mail/EmailDetail.tsx b/src/components/mail/EmailDetail.tsx
+index 8117db2..15a93fa 100644
+--- a/src/components/mail/EmailDetail.tsx
++++ b/src/components/mail/EmailDetail.tsx
+@@ -21,6 +21,11 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
+   onMarkAsRead 
+ }) => {
+   const { settings } = useSettings();
++  const [showHeaders, setShowHeaders] = React.useState(false);
++
++  React.useEffect(() => {
++    setShowHeaders(false);
++  }, [email?.uid]);
+ 
+   // Auto-download attachments if setting is enabled
+   React.useEffect(() => {
+@@ -57,6 +62,9 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
+   const sanitizedBody = DOMPurify.sanitize(displayContent);
+   const isFlagged = email.flags?.includes("\\Flagged");
+   const isSeen = email.flags?.includes("\\Seen");
++  const toLabel = email.to?.length ? email.to.join(", ") : "me";
++  const ccLabel = email.cc?.length ? email.cc.join(", ") : null;
++  const headerEntries = email.headers ? Object.entries(email.headers) : [];
+ 
+   return (
+     <main className="h-full flex-1 flex flex-col bg-nexus-background overflow-hidden text-nexus-foreground">
+@@ -113,11 +121,41 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
+               <span className="text-sm font-bold text-nexus-foreground">{email.from}</span>
+             </div>
+             <div className="text-[11px] text-nexus-muted flex flex-col gap-0.5">
+-              <p>收件人: <span className="text-nexus-foreground/80">me</span></p>
++              <p>收件人: <span className="text-nexus-foreground/80">{toLabel}</span></p>
++              {ccLabel && (
++                <p>抄送: <span className="text-nexus-foreground/80">{ccLabel}</span></p>
++              )}
+               <p>日期: <span className="text-nexus-foreground/80">{formatDate(email.date)}</span></p>
+             </div>
+           </div>
+         </div>
++
++        <div className="mt-4">
++          <button
++            type="button"
++            data-testid="toggle-headers"
++            className="text-xs text-nexus-muted hover:text-nexus-foreground transition-colors"
++            onClick={() => setShowHeaders((prev) => !prev)}
++          >
++            {showHeaders ? "隐藏头信息" : "展开头信息"}
++          </button>
++          {showHeaders && (
++            <div className="mt-3 rounded-nexus border border-nexus-border bg-nexus-sidebar/30 p-3 text-xs text-nexus-muted">
++              {headerEntries.length > 0 ? (
++                <div className="flex flex-col gap-1">
++                  {headerEntries.map(([key, value]) => (
++                    <div key={key} className="flex gap-2">
++                      <span className="min-w-[90px] font-semibold text-nexus-foreground/80">{key}</span>
++                      <span className="break-all">{value}</span>
++                    </div>
++                  ))}
++                </div>
++              ) : (
++                <div>暂无头信息</div>
++              )}
++            </div>
++          )}
++        </div>
+       </header>
+       
+       <div className="flex-1 overflow-y-auto p-8">
+diff --git a/src/hooks/useMailbox.ts b/src/hooks/useMailbox.ts
+index 233d55e..35a4ec0 100644
+--- a/src/hooks/useMailbox.ts
++++ b/src/hooks/useMailbox.ts
+@@ -13,6 +13,9 @@ export interface Email {
+   uid: string;
+   subject: string;
+   from: string;
++  to?: string[];
++  cc?: string[];
++  headers?: Record<string, string>;
+   date: string;
+   snippet: string;
+   body_html?: string;
+@@ -26,31 +29,66 @@ export interface Email {
+   flags?: string[];
+ }
+ 
++const SYSTEM_ROLE_ORDER = ["INBOX", "SENT", "DRAFTS", "ARCHIVE", "SPAM", "TRASH"];
++
++const resolveFolderRole = (folder: Folder) => {
++  if (folder.system_role) return folder.system_role.toUpperCase();
++  const name = folder.name.toLowerCase();
++  if (name.includes("inbox") || name.includes("收件箱")) return "INBOX";
++  if (name.includes("sent") || name.includes("已发送")) return "SENT";
++  if (name.includes("draft") || name.includes("草稿")) return "DRAFTS";
++  if (name.includes("archive") || name.includes("归档")) return "ARCHIVE";
++  if (name.includes("spam") || name.includes("junk") || name.includes("垃圾邮件")) return "SPAM";
++  if (name.includes("trash") || name.includes("deleted") || name.includes("垃圾箱") || name.includes("已删除")) return "TRASH";
++  return null;
++};
++
++const sortFolders = (items: Folder[]) => {
++  return [...items].sort((a, b) => {
++    const roleA = resolveFolderRole(a);
++    const roleB = resolveFolderRole(b);
++    const idxA = roleA ? SYSTEM_ROLE_ORDER.indexOf(roleA) : -1;
++    const idxB = roleB ? SYSTEM_ROLE_ORDER.indexOf(roleB) : -1;
++    const weightA = idxA === -1 ? SYSTEM_ROLE_ORDER.length : idxA;
++    const weightB = idxB === -1 ? SYSTEM_ROLE_ORDER.length : idxB;
++    if (weightA !== weightB) return weightA - weightB;
++    return a.name.localeCompare(b.name);
++  });
++};
++
+ export function useMailbox(accountEmail: string | null) {
+   const [folders, setFolders] = useState<Folder[]>([]);
+   const [emails, setEmails] = useState<Email[]>([]);
+   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+   const [loading, setLoading] = useState(false);
++  const [foldersLoading, setFoldersLoading] = useState(false);
+   const [syncing, setSyncing] = useState(false);
+   const [searchQuery, setSearchQuery] = useState("");
+ 
+   // Fetch folders when account changes
+   useEffect(() => {
++    setSelectedFolderId(null);
++    setEmails([]);
++    setSearchQuery("");
++    setFolders([]);
+     if (!accountEmail) {
+-      setFolders([]);
+-      setSelectedFolderId(null);
++      setFoldersLoading(false);
+       return;
+     }
+ 
+     const fetchFolders = async () => {
++      setFoldersLoading(true);
+       try {
+         const flds: Folder[] = await invoke("get_folders", { accountEmail });
+-        setFolders(flds);
+-        if (flds.length > 0 && !selectedFolderId) {
+-          setSelectedFolderId(flds[0].id);
++        const ordered = sortFolders(flds);
++        setFolders(ordered);
++        if (ordered.length > 0) {
++          setSelectedFolderId(ordered[0].id);
+         }
+       } catch (e) {
+         console.error("Failed to fetch folders", e);
++      } finally {
++        setFoldersLoading(false);
+       }
+     };
+     fetchFolders();
+@@ -151,8 +189,9 @@ export function useMailbox(accountEmail: string | null) {
+     try {
+       await invoke("sync_account", { email: accountEmail });
+       // Refresh folders and current email list
++      setFoldersLoading(true);
+       const flds: Folder[] = await invoke("get_folders", { accountEmail });
+-      setFolders(flds);
++      setFolders(sortFolders(flds));
+       
+       if (selectedFolderId) {
+         const msgs: Email[] = await invoke("get_emails", { 
+@@ -166,6 +205,7 @@ export function useMailbox(accountEmail: string | null) {
+       console.error("Sync failed", e);
+       throw e;
+     } finally {
++      setFoldersLoading(false);
+       setSyncing(false);
+     }
+   };
+@@ -301,6 +341,7 @@ export function useMailbox(accountEmail: string | null) {
+     selectedFolderId,
+     setSelectedFolderId,
+     loading,
++    foldersLoading,
+     syncing,
+     sync,
+     fetchEmailDetails,

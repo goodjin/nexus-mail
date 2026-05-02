@@ -1,0 +1,146 @@
+diff --git a/src-tauri/src/core/security.rs b/src-tauri/src/core/security.rs
+index deeef24..456d6d3 100644
+--- a/src-tauri/src/core/security.rs
++++ b/src-tauri/src/core/security.rs
+@@ -5,6 +5,7 @@ use aes_gcm::{
+ use anyhow::{anyhow, Result};
+ use base64::{engine::general_purpose::STANDARD, Engine as _};
+ use hmac::Hmac;
++use once_cell::sync::Lazy;
+ use pbkdf2::pbkdf2;
+ use rand::Rng;
+ use serde::{Deserialize, Serialize};
+@@ -12,8 +13,10 @@ use sha2::Sha256;
+ use std::collections::HashMap;
+ use std::fs;
+ use std::path::PathBuf;
++use std::sync::Mutex;
+ 
+ pub struct SecurityService;
++static STORE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+ 
+ #[derive(Serialize, Deserialize)]
+ struct EncryptedStore {
+@@ -24,6 +27,7 @@ struct EncryptedStore {
+ impl SecurityService {
+     const STORE_FILENAME: &'static str = "credentials.enc";
+     const SALT: &'static [u8] = b"nexus-mail-salt-2026";
++    const DB_KEY_ID: &'static str = "system:db_encryption_key";
+ 
+     /// 获取存储文件的路径
+     fn get_store_path() -> Result<PathBuf> {
+@@ -95,32 +99,79 @@ impl SecurityService {
+         Ok(store)
+     }
+ 
+-    pub fn set_password(email: &str, password: &str) -> Result<()> {
+-        let mut store = Self::load_store().unwrap_or_default();
+-        store.insert(email.to_string(), password.to_string());
+-        Self::save_store(&store)
++    fn namespaced_key(namespace: &str, key: &str) -> String {
++        format!("{}:{}", namespace, key)
+     }
+ 
+-    pub fn get_password(email: &str) -> Result<String> {
++    fn get_secret_with_legacy(namespace: &str, key: &str) -> Result<String> {
+         let store = Self::load_store()?;
++        let namespaced_key = Self::namespaced_key(namespace, key);
+         store
+-            .get(email)
++            .get(&namespaced_key)
++            .or_else(|| store.get(key))
+             .cloned()
+-            .ok_or_else(|| anyhow!("Password not found for {}", email))
++            .ok_or_else(|| anyhow!("Secret not found for {}", namespaced_key))
+     }
+ 
+-    pub fn delete_password(email: &str) -> Result<()> {
+-        let mut store = Self::load_store().unwrap_or_default();
+-        store.remove(email);
++    pub fn set_secret(namespace: &str, key: &str, value: &str) -> Result<()> {
++        let _guard = STORE_LOCK
++            .lock()
++            .map_err(|_| anyhow!("Credential store lock poisoned"))?;
++        let mut store = Self::load_store()?;
++        store.insert(Self::namespaced_key(namespace, key), value.to_string());
++        Self::save_store(&store)
++    }
++
++    pub fn get_secret(namespace: &str, key: &str) -> Result<String> {
++        let _guard = STORE_LOCK
++            .lock()
++            .map_err(|_| anyhow!("Credential store lock poisoned"))?;
++        Self::get_secret_with_legacy(namespace, key)
++    }
++
++    pub fn delete_secret(namespace: &str, key: &str) -> Result<()> {
++        let _guard = STORE_LOCK
++            .lock()
++            .map_err(|_| anyhow!("Credential store lock poisoned"))?;
++        let mut store = Self::load_store()?;
++        store.remove(&Self::namespaced_key(namespace, key));
++        store.remove(key);
+         Self::save_store(&store)
+     }
+ 
++    pub fn set_password(email: &str, password: &str) -> Result<()> {
++        Self::set_secret("account", email, password)
++    }
++
++    pub fn get_password(email: &str) -> Result<String> {
++        Self::get_secret("account", email)
++            .map_err(|_| anyhow!("Password not found for {}", email))
++    }
++
++    pub fn delete_password(email: &str) -> Result<()> {
++        Self::delete_secret("account", email)
++    }
++
++    pub fn set_oauth_token(account_id: &str, token: &str) -> Result<()> {
++        Self::set_secret("oauth", account_id, token)
++    }
++
++    pub fn get_oauth_token(account_id: &str) -> Result<String> {
++        Self::get_secret("oauth", account_id)
++    }
++
++    pub fn delete_oauth_token(account_id: &str) -> Result<()> {
++        Self::delete_secret("oauth", account_id)
++    }
++
+     pub fn get_or_create_db_key() -> Result<String> {
+-        match Self::get_password("db_encryption_key") {
++        match Self::get_secret("system", "db_encryption_key")
++            .or_else(|_| Self::get_secret_with_legacy("system", Self::DB_KEY_ID))
++        {
+             Ok(key) => Ok(key),
+             Err(_) => {
+                 let new_key = uuid::Uuid::new_v4().to_string();
+-                Self::set_password("db_encryption_key", &new_key)?;
++                Self::set_secret("system", "db_encryption_key", &new_key)?;
+                 Ok(new_key)
+             }
+         }
+@@ -159,12 +210,15 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn test_print_real_store() {
+-        println!("STORE PATH: {:?}", SecurityService::get_store_path().unwrap());
+-        if let Ok(store) = SecurityService::load_store() {
+-            println!("REAL STORE CONTENTS: {:?}", store);
+-        } else {
+-            println!("REAL STORE LOAD FAILED");
+-        }
++    fn test_oauth_token_ops() {
++        let account_id = "oauth-test@nexus-mail.local";
++        let token = "oauth-token-123";
++
++        SecurityService::set_oauth_token(account_id, token).unwrap();
++        let retrieved = SecurityService::get_oauth_token(account_id).unwrap();
++        assert_eq!(retrieved, token);
++
++        SecurityService::delete_oauth_token(account_id).unwrap();
++        assert!(SecurityService::get_oauth_token(account_id).is_err());
+     }
+ }

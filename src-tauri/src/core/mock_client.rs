@@ -1,17 +1,69 @@
-use super::traits::{EmailDetails, EmailSummary, FolderInfo, MailClient, MailSender};
+use super::traits::{
+    EmailDetails, EmailSummary, FolderInfo, MailClient, MailSender, SendEmailRequest,
+    SendEmailResult,
+};
 use anyhow::Result;
 use async_trait::async_trait;
 
 pub struct MockMailClient {
     pub is_connected: bool,
+    folders: Vec<FolderInfo>,
 }
 
 impl MockMailClient {
     pub fn new() -> Self {
         Self {
             is_connected: false,
+            folders: default_folders(),
         }
     }
+}
+
+fn default_folders() -> Vec<FolderInfo> {
+    vec![
+        FolderInfo {
+            id: "mock-inbox".into(),
+            name: "收件箱".into(),
+            remote_id: "INBOX".into(),
+            unread_count: 128,
+            system_role: Some("INBOX".into()),
+        },
+        FolderInfo {
+            id: "mock-flagged".into(),
+            name: "重要邮件".into(),
+            remote_id: "FLAGGED".into(),
+            unread_count: 999,
+            system_role: None,
+        },
+        FolderInfo {
+            id: "mock-drafts".into(),
+            name: "草稿箱".into(),
+            remote_id: "Drafts".into(),
+            unread_count: 2,
+            system_role: Some("DRAFTS".into()),
+        },
+        FolderInfo {
+            id: "mock-sent".into(),
+            name: "已发送".into(),
+            remote_id: "Sent".into(),
+            unread_count: 0,
+            system_role: Some("SENT".into()),
+        },
+        FolderInfo {
+            id: "mock-junk".into(),
+            name: "垃圾邮件".into(),
+            remote_id: "Junk".into(),
+            unread_count: 42,
+            system_role: Some("SPAM".into()),
+        },
+        FolderInfo {
+            id: "mock-nexus".into(),
+            name: "工作/项目/Nexus".into(),
+            remote_id: "Work/Nexus".into(),
+            unread_count: 0,
+            system_role: None,
+        },
+    ]
 }
 
 #[async_trait]
@@ -31,51 +83,7 @@ impl MailClient for MockMailClient {
     }
 
     async fn get_folders(&mut self) -> Result<Vec<FolderInfo>> {
-        let folders = vec![
-            FolderInfo {
-                id: "mock-inbox".into(),
-                name: "收件箱".into(),
-                remote_id: "INBOX".into(),
-                unread_count: 128,
-                system_role: Some("INBOX".into()),
-            },
-            FolderInfo {
-                id: "mock-flagged".into(),
-                name: "重要邮件".into(),
-                remote_id: "FLAGGED".into(),
-                unread_count: 999,
-                system_role: None,
-            },
-            FolderInfo {
-                id: "mock-drafts".into(),
-                name: "草稿箱".into(),
-                remote_id: "Drafts".into(),
-                unread_count: 2,
-                system_role: Some("DRAFTS".into()),
-            },
-            FolderInfo {
-                id: "mock-sent".into(),
-                name: "已发送".into(),
-                remote_id: "Sent".into(),
-                unread_count: 0,
-                system_role: Some("SENT".into()),
-            },
-            FolderInfo {
-                id: "mock-junk".into(),
-                name: "垃圾邮件".into(),
-                remote_id: "Junk".into(),
-                unread_count: 42,
-                system_role: Some("SPAM".into()),
-            },
-            FolderInfo {
-                id: "mock-nexus".into(),
-                name: "工作/项目/Nexus".into(),
-                remote_id: "Work/Nexus".into(),
-                unread_count: 0,
-                system_role: None,
-            },
-        ];
-        Ok(folders)
+        Ok(self.folders.clone())
     }
 
     async fn select_folder(&mut self, folder: &str) -> Result<()> {
@@ -110,6 +118,35 @@ impl MailClient for MockMailClient {
         Ok(emails)
     }
 
+    async fn create_folder(&mut self, name: &str) -> Result<()> {
+        let folder = FolderInfo {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: name.to_string(),
+            remote_id: name.to_string(),
+            unread_count: 0,
+            system_role: None,
+        };
+        self.folders.push(folder);
+        Ok(())
+    }
+
+    async fn rename_folder(&mut self, old_name: &str, new_name: &str) -> Result<()> {
+        if let Some(folder) = self
+            .folders
+            .iter_mut()
+            .find(|folder| folder.remote_id == old_name)
+        {
+            folder.remote_id = new_name.to_string();
+            folder.name = new_name.to_string();
+        }
+        Ok(())
+    }
+
+    async fn delete_folder(&mut self, name: &str) -> Result<()> {
+        self.folders.retain(|folder| folder.remote_id != name);
+        Ok(())
+    }
+
     async fn get_emails_since(
         &mut self,
         _folder: &str,
@@ -133,11 +170,16 @@ impl MailClient for MockMailClient {
         before_uid: u32,
         limit: usize,
     ) -> Result<Vec<EmailSummary>> {
-        println!("[Mock] History fetch before UID {}, limit {}", before_uid, limit);
+        println!(
+            "[Mock] History fetch before UID {}, limit {}",
+            before_uid, limit
+        );
         let mut emails = Vec::new();
         for i in 1..=limit {
             let uid = before_uid.saturating_sub(i as u32);
-            if uid == 0 { break; }
+            if uid == 0 {
+                break;
+            }
             emails.push(EmailSummary {
                 uid: uid.to_string(),
                 subject: format!("历史邮件 #{}", uid),
@@ -161,7 +203,19 @@ impl MailClient for MockMailClient {
                 filename: "welcome.pdf".to_string(),
                 mime_type: "application/pdf".to_string(),
                 size: 1024 * 1024,
+                content_id: None,
+                is_inline: false,
             }],
+            headers: vec![
+                super::traits::EmailHeader {
+                    name: "From".to_string(),
+                    value: "mock@example.com".to_string(),
+                },
+                super::traits::EmailHeader {
+                    name: "Subject".to_string(),
+                    value: "Mock Detail".to_string(),
+                },
+            ],
         })
     }
 
@@ -192,13 +246,25 @@ impl MailClient for MockMailClient {
         Ok(())
     }
 
+    async fn move_email(&mut self, _folder: &str, _uid: &str, _target_folder: &str) -> Result<()> {
+        println!(
+            "[Mock] Moving email {} from {} to {}",
+            _uid, _folder, _target_folder
+        );
+        Ok(())
+    }
+
     async fn idle(&mut self, _folder: &str) -> Result<()> {
         println!("[Mock] Entering IDLE for {}", _folder);
         Ok(())
     }
 
     async fn append_message(&mut self, _folder: &str, _content: &[u8]) -> Result<()> {
-        println!("[Mock] Appending message ({} bytes) to {}", _content.len(), _folder);
+        println!(
+            "[Mock] Appending message ({} bytes) to {}",
+            _content.len(),
+            _folder
+        );
         Ok(())
     }
 }
@@ -207,21 +273,17 @@ pub struct MockMailSender;
 
 #[async_trait]
 impl MailSender for MockMailSender {
-    async fn send_email(
-        &self,
-        from: &str,
-        to: &str,
-        _subject: &str,
-        _body: &str,
-        attachments: Vec<String>,
-    ) -> Result<(Vec<u8>, String)> {
+    async fn send_email(&self, request: &SendEmailRequest) -> Result<SendEmailResult> {
         println!(
             "[Mock] Sending SMTP email: {} -> {} with {} attachments",
-            from,
-            to,
-            attachments.len()
+            request.from,
+            request.to.join(","),
+            request.attachments.len()
         );
         let msg_id = format!("<{}@mock-send.local>", uuid::Uuid::new_v4());
-        Ok((b"Mock MIME Message Content".to_vec(), msg_id))
+        Ok(SendEmailResult {
+            raw: b"Mock MIME Message Content".to_vec(),
+            message_id: msg_id,
+        })
     }
 }

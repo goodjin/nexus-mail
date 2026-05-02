@@ -1,0 +1,805 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index ad17e86..1197613 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -9,12 +9,25 @@ import { ComposeModal } from "./components/mail/ComposeModal";
+ import { SettingsModal } from "./components/settings/SettingsModal";
+ import "./App.css";
+ 
++type ComposePreset = {
++  to?: string;
++  cc?: string;
++  bcc?: string;
++  subject?: string;
++  body?: string;
++};
++
+ const App: React.FC = () => {
+   const { 
+     accounts, 
+     selectedAccount, 
+     setSelectedAccount
+   } = useAccountContext();
++  const selectedAccountInfo = React.useMemo(
++    () => accounts.find((account) => account.id === selectedAccount) ?? null,
++    [accounts, selectedAccount]
++  );
++  const selectedAccountEmail = selectedAccountInfo?.email ?? null;
+ 
+   const {
+     folders,
+@@ -22,6 +35,7 @@ const App: React.FC = () => {
+     selectedFolderId,
+     setSelectedFolderId,
+     loading: emailsLoading,
++    foldersLoading,
+     syncing,
+     sync,
+     fetchEmailDetails,
+@@ -30,79 +44,301 @@ const App: React.FC = () => {
+     markAsRead,
+     loadMore,
+     searchQuery,
+-    setSearchQuery
+-  } = useMailbox(selectedAccount);
++    setSearchQuery,
++    searchFilters,
++    setSearchFilters,
++    searchHistory,
++    clearSearchHistory,
++    applyEmailAction,
++    moveEmails
++  } = useMailbox(selectedAccountEmail);
+ 
+   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
++  const [composePreset, setComposePreset] = useState<ComposePreset | undefined>(undefined);
++  const [detailStatus, setDetailStatus] = useState<{ state: "idle" | "loading" | "error"; message?: string }>({ state: "idle" });
++  const [accountIssues, setAccountIssues] = useState<Record<string, { state: "error"; message?: string }>>({});
++
++  const isAccountIssue = (message: string) => {
++    const normalized = message.toLowerCase();
++    return (
++      normalized.includes("password") ||
++      normalized.includes("auth") ||
++      normalized.includes("login") ||
++      normalized.includes("credential") ||
++      normalized.includes("imap") ||
++      normalized.includes("smtp")
++    );
++  };
++
++  const recordAccountIssue = (message: string) => {
++    if (!selectedAccount) return;
++    if (!isAccountIssue(message)) return;
++    setAccountIssues((prev) => ({
++      ...prev,
++      [selectedAccount]: { state: "error", message },
++    }));
++  };
++
++  const clearAccountIssue = () => {
++    if (!selectedAccount) return;
++    setAccountIssues((prev) => {
++      if (!prev[selectedAccount]) return prev;
++      const next = { ...prev };
++      delete next[selectedAccount];
++      return next;
++    });
++  };
++
++  useEffect(() => {
++    setSelectedEmail(null);
++    setDetailStatus({ state: "idle" });
++  }, [selectedAccount]);
++
++  useEffect(() => {
++    setSelectedEmail(null);
++    setDetailStatus({ state: "idle" });
++  }, [selectedFolderId]);
+   
+   // Sync selectedEmail with the emails array if it was updated by pre-fetch
+   const effectiveEmail = React.useMemo(() => {
+     if (!selectedEmail) return null;
+-    return emails.find(e => e.uid === selectedEmail.uid) || selectedEmail;
++    const listEmail = emails.find(e => e.uid === selectedEmail.uid);
++    if (!listEmail) return selectedEmail;
++    const hasDetails = Boolean(
++      selectedEmail.body_html ||
++      selectedEmail.body_text ||
++      (selectedEmail.attachments && selectedEmail.attachments.length > 0)
++    );
++    return hasDetails ? { ...listEmail, ...selectedEmail } : listEmail;
+   }, [emails, selectedEmail]);
+   
+   // Fetch full details when email is selected
+   useEffect(() => {
+-    if (effectiveEmail && !effectiveEmail.body_html && !effectiveEmail.body_text) {
++    const needsDetails = effectiveEmail && (
++      (!effectiveEmail.body_html && !effectiveEmail.body_text) ||
++      !effectiveEmail.attachments
++    );
++    if (needsDetails) {
++      let isCancelled = false;
++      const uid = effectiveEmail.uid;
+       const getDetails = async () => {
+         try {
+-          const fullEmail = await fetchEmailDetails(effectiveEmail.uid);
+-          setSelectedEmail({ ...effectiveEmail, ...fullEmail });
++          setDetailStatus({ state: "loading" });
++          const fullEmail = await fetchEmailDetails(uid);
++          if (!isCancelled) {
++            setSelectedEmail((prev) => (prev?.uid === uid ? { ...prev, ...fullEmail } : prev));
++            setDetailStatus({ state: "idle" });
++            clearAccountIssue();
++          }
+         } catch (e) {
++          const message = e instanceof Error ? e.message : String(e);
+           console.error("Fetch details failed", e);
++          if (!isCancelled) {
++            setDetailStatus({ state: "error", message });
++            recordAccountIssue(message);
++          }
+         }
+       };
+       getDetails();
++      return () => {
++        isCancelled = true;
++      };
+     }
++    setDetailStatus({ state: "idle" });
++    return undefined;
+   }, [effectiveEmail?.uid]);
+   const [isComposeOpen, setIsComposeOpen] = useState(false);
+   const [settingsState, setSettingsState] = useState<{ isOpen: boolean, initialTab?: 'general' | 'accounts', initialAction?: 'add_account' }>({ isOpen: false });
+-  const [statusMsg, setStatusMsg] = useState<string | null>(null);
++  const [syncStatus, setSyncStatus] = useState<{ type: "loading" | "success" | "error"; message: string } | null>(null);
++
++  const escapeHtml = (value: string) =>
++    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
++
++  const buildQuotedBody = (email: Email) => {
++    const fallbackText = email.body_text || email.snippet || "";
++    const rawBody = email.body_html
++      ? email.body_html
++      : `<p>${escapeHtml(fallbackText).replace(/\n/g, "<br />")}</p>`;
++    const metaLines = [
++      "<p>--- Original Message ---</p>",
++      `<p>From: ${escapeHtml(email.from)}</p>`,
++      email.to?.length ? `<p>To: ${escapeHtml(email.to.join(", "))}</p>` : "",
++      `<p>Subject: ${escapeHtml(email.subject || "")}</p>`
++    ].filter(Boolean).join("");
++    return `<p></p>${metaLines}<blockquote>${rawBody}</blockquote>`;
++  };
++
++  const withSubjectPrefix = (prefix: string, subject?: string) => {
++    const trimmed = subject?.trim() ?? "";
++    if (!trimmed) return prefix.trim();
++    return trimmed.toLowerCase().startsWith(prefix.toLowerCase()) ? trimmed : `${prefix}${trimmed}`;
++  };
++
++  const handleCloseCompose = () => {
++    setIsComposeOpen(false);
++    setComposePreset(undefined);
++  };
+ 
+   // Auto-hide status messages
+   useEffect(() => {
+-    if (statusMsg) {
+-      const timer = setTimeout(() => setStatusMsg(null), 3000);
+-      return () => clearTimeout(timer);
+-    }
+-  }, [statusMsg]);
++    if (!syncStatus || syncStatus.type === "loading") return;
++    const timer = setTimeout(() => setSyncStatus(null), 3000);
++    return () => clearTimeout(timer);
++  }, [syncStatus]);
+ 
+   const handleSync = async () => {
++    if (syncing) return;
+     try {
+-      setStatusMsg("Syncing account...");
++      setSyncStatus({ type: "loading", message: "Syncing account..." });
+       await sync();
+-      setStatusMsg("Sync completed!");
++      setSyncStatus({ type: "success", message: "Sync completed!" });
++      clearAccountIssue();
+     } catch (e) {
+-      setStatusMsg("Sync failed: " + e);
++      const message = e instanceof Error ? e.message : String(e);
++      setSyncStatus({ type: "error", message: `Sync failed: ${message}` });
++      recordAccountIssue(message);
+     }
+   };
+ 
++  const focusSearchInput = React.useCallback(() => {
++    if (typeof document === "undefined") return;
++    const input = document.querySelector<HTMLInputElement>('[data-testid="search-input"]');
++    if (input) {
++      input.focus();
++      input.select();
++    }
++  }, []);
++
++  const isEditableTarget = (target: EventTarget | null) => {
++    if (!(target instanceof HTMLElement)) return false;
++    const tag = target.tagName.toLowerCase();
++    return tag === "input" || tag === "textarea" || target.isContentEditable;
++  };
++
++  useEffect(() => {
++    const handleKeydown = (event: KeyboardEvent) => {
++      const modKey = event.metaKey || event.ctrlKey;
++      if (!modKey || isEditableTarget(event.target)) return;
++      const key = event.key.toLowerCase();
++      if (key === "n") {
++        event.preventDefault();
++        setComposePreset(undefined);
++        setIsComposeOpen(true);
++      }
++      if (key === "k") {
++        event.preventDefault();
++        focusSearchInput();
++      }
++      if (key === ",") {
++        event.preventDefault();
++        setSettingsState({ isOpen: true, initialTab: 'general' });
++      }
++      if (key === "s" && event.shiftKey) {
++        event.preventDefault();
++        handleSync();
++      }
++    };
++    window.addEventListener("keydown", handleKeydown);
++    return () => window.removeEventListener("keydown", handleKeydown);
++  }, [focusSearchInput, handleSync]);
++
+   const currentFolder = folders.find(f => f.id === selectedFolderId);
+ 
++  useEffect(() => {
++    if (!import.meta.env.DEV || typeof window === "undefined") return;
++      const global = window as typeof window & {
++        __nexusTest?: {
++          getFirstEmail: () => Email | null;
++          selectEmailByUid: (uid: string) => void;
++          openReplyForFirstEmail: () => void;
++          openForwardForFirstEmail: () => void;
++        };
++      };
++      global.__nexusTest = {
++        getFirstEmail: () => emails[0] ?? null,
++        selectEmailByUid: (uid: string) => {
++          const email = emails.find(item => item.uid === uid);
++          if (!email) return;
++          setSelectedEmail(email);
++          const isUnread = !email.flags?.includes("\\Seen");
++          if (isUnread) {
++            markAsRead(email.uid, true);
++          }
++        },
++        openReplyForFirstEmail: () => {
++          const email = emails[0];
++          if (!email) return;
++          setComposePreset({
++            to: email.from,
++          subject: withSubjectPrefix("Re: ", email.subject),
++          body: buildQuotedBody(email)
++        });
++        setIsComposeOpen(true);
++      },
++      openForwardForFirstEmail: () => {
++        const email = emails[0];
++        if (!email) return;
++        setComposePreset({
++          subject: withSubjectPrefix("Fwd: ", email.subject),
++          body: buildQuotedBody(email)
++        });
++        setIsComposeOpen(true);
++      }
++    };
++    return () => {
++      delete global.__nexusTest;
++    };
++  }, [emails, buildQuotedBody, withSubjectPrefix]);
++  const handleFolderDrop = async (folderId: string, uids: string[]) => {
++    if (!selectedFolderId || folderId === selectedFolderId) return;
++    try {
++      await moveEmails(uids, folderId);
++      if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
++        setSelectedEmail(null);
++      }
++    } catch (e) {
++      console.error("Folder drop move failed", e);
++    }
++  };
++
+   return (
+     <div className="flex h-screen w-full bg-nexus-background overflow-hidden text-nexus-foreground">
+       {/* Toast Notification */}
+-      {statusMsg && (
++      {syncStatus && (
+         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
+-          <Badge className="px-4 py-2 shadow-lg animate-in fade-in slide-in-from-bottom-4">
+-            {statusMsg}
++          <Badge
++            className={`px-4 py-2 shadow-lg animate-in fade-in slide-in-from-bottom-4 ${
++              syncStatus.type === "error"
++                ? "bg-red-500 text-white"
++                : syncStatus.type === "success"
++                ? "bg-emerald-500 text-white"
++                : "bg-nexus-accent text-white"
++            }`}
++          >
++            {syncStatus.message}
+           </Badge>
+         </div>
+       )}
+ 
+       {/* Layers */}
+       <Sidebar 
+-        accounts={accounts.map(a => a.email)}
++        accounts={accounts}
++        accountIssues={accountIssues}
+         selectedAccount={selectedAccount}
+         onAccountChange={setSelectedAccount}
+         folders={folders}
++        isFolderLoading={foldersLoading}
+         selectedFolderId={selectedFolderId}
+         onFolderSelect={setSelectedFolderId}
+         onSync={handleSync}
+         isSyncing={syncing}
+-        onCompose={() => setIsComposeOpen(true)}
++        onCompose={() => {
++          setComposePreset(undefined);
++          setIsComposeOpen(true);
++        }}
+         onSettings={() => setSettingsState({ isOpen: true, initialTab: 'general' })}
+         onAddAccount={() => setSettingsState({ isOpen: true, initialTab: 'accounts', initialAction: 'add_account' })}
++        onFolderDrop={handleFolderDrop}
+       />
+ 
+       <EmailList 
+@@ -117,12 +353,47 @@ const App: React.FC = () => {
+         }}
+         folderName={currentFolder?.name || "Inbox"}
+         isLoading={emailsLoading}
++        isFolderLoading={foldersLoading}
++        hasFolder={Boolean(selectedFolderId)}
+         searchQuery={searchQuery}
+         onSearchChange={setSearchQuery}
++        searchFilters={searchFilters}
++        onSearchFiltersChange={setSearchFilters}
++        searchHistory={searchHistory}
++        onClearSearchHistory={clearSearchHistory}
++        folders={folders}
++        currentFolderId={selectedFolderId}
++        onApplyEmailAction={async (uids, action) => {
++          try {
++            await applyEmailAction(uids, action);
++            clearAccountIssue();
++          } catch (e) {
++            const message = e instanceof Error ? e.message : String(e);
++            recordAccountIssue(message);
++            throw e;
++          }
++        }}
++        onMoveEmails={async (uids, targetFolderId) => {
++          try {
++            await moveEmails(uids, targetFolderId);
++            clearAccountIssue();
++          } catch (e) {
++            const message = e instanceof Error ? e.message : String(e);
++            recordAccountIssue(message);
++            throw e;
++          }
++        }}
+         onDeleteEmails={async (uids) => {
+-            await deleteEmails(uids);
+-            if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
+-                setSelectedEmail(null);
++            try {
++              await deleteEmails(uids);
++              if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
++                  setSelectedEmail(null);
++              }
++              clearAccountIssue();
++            } catch (e) {
++              const message = e instanceof Error ? e.message : String(e);
++              recordAccountIssue(message);
++              throw e;
+             }
+         }}
+         onLoadMore={loadMore}
+@@ -130,9 +401,17 @@ const App: React.FC = () => {
+ 
+       <EmailDetail 
+         email={effectiveEmail}
++        detailStatus={detailStatus}
+         onDelete={async (uid: string) => {
+-            await deleteEmails([uid]);
+-            setSelectedEmail(null);
++            try {
++              await deleteEmails([uid]);
++              setSelectedEmail(null);
++              clearAccountIssue();
++            } catch (e) {
++              const message = e instanceof Error ? e.message : String(e);
++              setDetailStatus({ state: "error", message });
++              recordAccountIssue(message);
++            }
+         }}
+         onToggleFlag={async (uid: string, flags: string[]) => {
+             await toggleFlag(uid, flags);
+@@ -154,13 +433,29 @@ const App: React.FC = () => {
+                 setSelectedEmail({ ...selectedEmail, flags: newFlags });
+             }
+         }}
++        onReply={(email) => {
++          setComposePreset({
++            to: email.from,
++            subject: withSubjectPrefix("Re: ", email.subject),
++            body: buildQuotedBody(email)
++          });
++          setIsComposeOpen(true);
++        }}
++        onForward={(email) => {
++          setComposePreset({
++            subject: withSubjectPrefix("Fwd: ", email.subject),
++            body: buildQuotedBody(email)
++          });
++          setIsComposeOpen(true);
++        }}
+       />
+ 
+-      {selectedAccount && (
++      {selectedAccountInfo && (
+         <ComposeModal 
+           isOpen={isComposeOpen}
+-          onClose={() => setIsComposeOpen(false)}
+-          fromAccount={selectedAccount}
++          onClose={handleCloseCompose}
++          fromAccount={selectedAccountInfo.email}
++          initialValues={composePreset}
+         />
+       )}
+ 
+diff --git a/src/components/layout/Sidebar.tsx b/src/components/layout/Sidebar.tsx
+index feb8b60..8db65a9 100644
+--- a/src/components/layout/Sidebar.tsx
++++ b/src/components/layout/Sidebar.tsx
+@@ -1,15 +1,18 @@
+-import React from "react";
++import React, { useEffect, useState } from "react";
+ import { Folder } from "../../hooks/useMailbox";
++import { AccountInfo } from "../../context/AccountContext";
+ import { Button } from "../ui/Button";
+ import { Badge } from "../ui/Badge";
+-import { RefreshCw, Mail, Inbox, Archive, Trash2, Settings, FileText, AlertOctagon } from "lucide-react";
++import { RefreshCw, Mail, Inbox, Archive, Trash2, Settings, FileText, AlertOctagon, Loader2 } from "lucide-react";
+ import { cn } from "../../lib/utils";
+ 
+ interface SidebarProps {
+-  accounts: string[];
++  accounts: AccountInfo[];
++  accountIssues?: Record<string, { state: "error"; message?: string }>;
+   selectedAccount: string | null;
+-  onAccountChange: (account: string) => void;
++  onAccountChange: (accountId: string) => void;
+   folders: Folder[];
++  isFolderLoading: boolean;
+   selectedFolderId: string | null;
+   onFolderSelect: (id: string) => void;
+   onSync: () => void;
+@@ -17,13 +20,16 @@ interface SidebarProps {
+   onCompose: () => void;
+   onSettings: () => void;
+   onAddAccount: () => void;
++  onFolderDrop?: (folderId: string, uids: string[]) => void;
+ }
+ 
+ export const Sidebar: React.FC<SidebarProps> = ({
+   accounts,
++  accountIssues,
+   selectedAccount,
+   onAccountChange,
+   folders,
++  isFolderLoading,
+   selectedFolderId,
+   onFolderSelect,
+   onSync,
+@@ -31,19 +37,54 @@ export const Sidebar: React.FC<SidebarProps> = ({
+   onCompose,
+   onSettings,
+   onAddAccount,
++  onFolderDrop,
+ }) => {
++  const [switchingAccount, setSwitchingAccount] = useState<string | null>(null);
++  const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
++  const dragMimeType = "application/x-nexus-mail-uids";
++
++  useEffect(() => {
++    if (switchingAccount && selectedAccount === switchingAccount) {
++      const timer = setTimeout(() => setSwitchingAccount(null), 500);
++      return () => clearTimeout(timer);
++    }
++  }, [selectedAccount, switchingAccount]);
++
++  const handleDrop = (event: React.DragEvent, folderId: string) => {
++    event.preventDefault();
++    setDragOverFolderId(null);
++    if (!onFolderDrop) return;
++    const payload = event.dataTransfer.getData(dragMimeType);
++    if (!payload) return;
++    try {
++      const uids = JSON.parse(payload);
++      if (Array.isArray(uids) && uids.length > 0) {
++        onFolderDrop(folderId, uids);
++      }
++    } catch (e) {
++      console.warn("Invalid drag payload", e);
++    }
++  };
++
+   return (
+     <aside className="h-full flex flex-shrink-0 bg-nexus-sidebar/90 backdrop-blur-md border-r">
+       {/* Account Bar (Spark-style) */}
+       <div className="w-16 flex flex-col items-center py-6 gap-4 bg-black/5 border-r border-nexus-border/50 overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] shrink-0">
+         {accounts.map((acc) => {
+-          const initials = acc.substring(0, 2).toUpperCase();
+-          const isActive = selectedAccount === acc;
++          const initials = (acc.display_name ?? acc.email).substring(0, 2).toUpperCase();
++          const isActive = selectedAccount === acc.id;
++          const isSwitching = switchingAccount === acc.id;
++          const issue = accountIssues?.[acc.id];
++          const hasIssue = issue?.state === "error";
+           return (
+             <button
+-              key={acc}
+-              onClick={() => onAccountChange(acc)}
+-              title={acc}
++              key={acc.id}
++              onClick={() => {
++                if (acc.id === selectedAccount) return;
++                setSwitchingAccount(acc.id);
++                onAccountChange(acc.id);
++              }}
++              title={acc.email}
+               className={cn(
+                 "w-10 h-10 rounded-xl flex items-center justify-center text-xs font-bold transition-all duration-200 relative group shadow-sm",
+                 isActive 
+@@ -51,14 +92,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
+                   : "bg-white/10 text-nexus-muted hover:bg-white/20 hover:text-nexus-foreground"
+               )}
+             >
+-              {initials}
++              {isSwitching ? <Loader2 className="w-4 h-4 animate-spin" /> : initials}
+               {/* Active Indicator Dot */}
+               {isActive && (
+                 <div className="absolute -left-3 top-1/2 -translate-y-1/2 w-1 h-4 bg-nexus-accent rounded-r-full" />
+               )}
++              {hasIssue && (
++                <div
++                  className="absolute -right-1 -top-1 w-2 h-2 rounded-full bg-red-500"
++                  title={issue?.message ?? "Account error"}
++                />
++              )}
+               {/* Tooltip */}
+               <div className="absolute left-14 px-2 py-1 bg-gray-800 text-white text-[10px] rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50 shadow-xl">
+-                {acc}
++                {acc.email}
+               </div>
+             </button>
+           );
+@@ -115,69 +162,86 @@ export const Sidebar: React.FC<SidebarProps> = ({
+         </div>
+ 
+         <nav className="flex-1 overflow-y-auto px-2 space-y-1">
+-          {[...folders].sort((a, b) => {
+-            const getWeight = (f: Folder) => {
+-              const role = f.system_role?.toUpperCase();
+-              if (role === "INBOX") return 1;
+-              if (role === "DRAFTS") return 2;
+-              if (role === "SENT") return 3;
+-              if (role === "ARCHIVE") return 4;
+-              if (role === "SPAM") return 5;
+-              if (role === "TRASH") return 6;
+-              return 10;
+-            };
+-            const wA = getWeight(a);
+-            const wB = getWeight(b);
+-            if (wA !== wB) return wA - wB;
+-            return a.name.localeCompare(b.name);
+-          }).map((folder) => {
+-            const Icon = getFolderIcon(folder);
+-            const displayName = getLocalizedName(folder);
+-            return (
+-              <button
+-                key={folder.id}
+-                data-testid={`folder-${folder.name.toLowerCase()}`}
+-                onClick={() => onFolderSelect(folder.id)}
+-                className={cn(
+-                  "w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
+-                  selectedFolderId === folder.id 
+-                    ? "bg-nexus-primary text-nexus-primary-foreground" 
+-                    : "text-nexus-sidebar-foreground hover:bg-nexus-border/50"
+-                )}
+-              >
+-                <Icon className="w-4 h-4" />
+-                <span className="flex-1 text-left truncate">{displayName}</span>
+-                {folder.unread_count > 0 && (
+-                  <Badge 
+-                    data-testid={`badge-${folder.name.toLowerCase()}`}
+-                    variant={selectedFolderId === folder.id ? "secondary" : "primary"}
+-                    className="px-1.5 min-w-[1.25rem] justify-center"
+-                  >
+-                    {folder.unread_count}
+-                  </Badge>
+-                )}
+-              </button>
+-            );
+-          })}
++          {isFolderLoading && folders.length > 0 && (
++            <div className="px-3 py-2 text-[11px] text-nexus-muted">Refreshing folders...</div>
++          )}
++          {isFolderLoading && folders.length === 0 ? (
++            <div className="px-3 py-2 text-[11px] text-nexus-muted">Loading folders...</div>
++          ) : (
++            folders.map((folder) => {
++              const Icon = getFolderIcon(folder);
++              const displayName = getLocalizedName(folder);
++              const folderKey = getFolderKey(folder);
++              return (
++                <button
++                  key={folder.id}
++                  data-testid={`folder-${folderKey}`}
++                  onClick={() => onFolderSelect(folder.id)}
++                  onDragOver={(event) => {
++                    event.preventDefault();
++                    setDragOverFolderId(folder.id);
++                  }}
++                  onDragLeave={() => setDragOverFolderId(prev => (prev === folder.id ? null : prev))}
++                  onDrop={(event) => handleDrop(event, folder.id)}
++                  className={cn(
++                    "w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
++                    selectedFolderId === folder.id 
++                      ? "bg-nexus-primary text-nexus-primary-foreground" 
++                      : "text-nexus-sidebar-foreground hover:bg-nexus-border/50",
++                    dragOverFolderId === folder.id && "bg-nexus-border/70 ring-1 ring-nexus-accent/40"
++                  )}
++                >
++                  <Icon className="w-4 h-4" />
++                  <span className="flex-1 text-left truncate">{displayName}</span>
++                  {folder.unread_count > 0 && (
++                    <Badge 
++                      data-testid={`badge-${folderKey}`}
++                      variant={selectedFolderId === folder.id ? "secondary" : "primary"}
++                      className="px-1.5 min-w-[1.25rem] justify-center"
++                    >
++                      {folder.unread_count}
++                    </Badge>
++                  )}
++                </button>
++              );
++            })
++          )}
+         </nav>
+       </div>
+     </aside>
+   );
+ };
+ 
++function getFolderRole(folder: Folder) {
++  if (folder.system_role) return folder.system_role.toUpperCase();
++  const name = folder.name.toLowerCase();
++  if (name.includes("inbox") || name.includes("收件箱")) return "INBOX";
++  if (name.includes("sent") || name.includes("已发送")) return "SENT";
++  if (name.includes("draft") || name.includes("草稿")) return "DRAFTS";
++  if (name.includes("archive") || name.includes("归档")) return "ARCHIVE";
++  if (name.includes("spam") || name.includes("junk") || name.includes("垃圾邮件")) return "SPAM";
++  if (name.includes("trash") || name.includes("deleted") || name.includes("垃圾箱") || name.includes("已删除")) return "TRASH";
++  return null;
++}
++
++function getFolderKey(folder: Folder) {
++  const role = getFolderRole(folder);
++  return (role ?? folder.name).toLowerCase();
++}
++
+ function getLocalizedName(folder: Folder) {
+-  const role = folder.system_role?.toUpperCase();
++  const role = getFolderRole(folder);
+   if (role === "INBOX") return "收件箱";
+   if (role === "SENT") return "已发送";
+   if (role === "DRAFTS") return "草稿箱";
+-  if (role === "TRASH") return "已删除";
++  if (role === "TRASH") return "垃圾箱";
+   if (role === "SPAM") return "垃圾邮件";
+   if (role === "ARCHIVE") return "归档";
+-  return folder.name; // Fallback to server name
++  return folder.name;
+ }
+ 
+ function getFolderIcon(folder: Folder) {
+-  const role = folder.system_role?.toUpperCase();
++  const role = getFolderRole(folder);
+   if (role === "INBOX") return Inbox;
+   if (role === "SENT") return Mail;
+   if (role === "DRAFTS") return FileText;
+diff --git a/src/context/AccountContext.tsx b/src/context/AccountContext.tsx
+index 7e75380..064ef6d 100644
+--- a/src/context/AccountContext.tsx
++++ b/src/context/AccountContext.tsx
+@@ -12,16 +12,31 @@ export interface AccountInfo {
+   smtp_host: string;
+   smtp_port: number;
+   smtp_use_tls: boolean;
++  sync_enabled: boolean;
++  sync_interval: number;
++  last_sync: number | null;
++  status: string;
++  last_error: string | null;
++}
++
++export interface AccountDiscoveryResult {
++  imap_host?: string;
++  imap_port?: number;
++  imap_use_tls?: boolean;
++  smtp_host?: string;
++  smtp_port?: number;
++  smtp_use_tls?: boolean;
+ }
+ 
+ interface AccountContextType {
+   accounts: AccountInfo[];
+   selectedAccount: string | null;
+-  setSelectedAccount: (email: string | null) => void;
++  setSelectedAccount: (accountId: string | null) => void;
+   loading: boolean;
+   refreshAccounts: () => Promise<void>;
+   updateAccount: (details: AccountInfo) => Promise<void>;
+   updatePassword: (email: string, pass: string) => Promise<void>;
++  discoverAccountSettings: (email: string) => Promise<AccountDiscoveryResult | null>;
+ }
+ 
+ const AccountContext = createContext<AccountContextType | undefined>(undefined);
+@@ -36,8 +51,13 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
+       setLoading(true);
+       const data = await invoke('get_accounts_detailed') as AccountInfo[];
+       setAccounts(data);
+-      if (data.length > 0 && !selectedAccount) {
+-        setSelectedAccount(data[0].email);
++      if (data.length === 0) {
++        setSelectedAccount(null);
++        return;
++      }
++      const stillExists = data.some((account) => account.id === selectedAccount);
++      if (!selectedAccount || !stillExists) {
++        setSelectedAccount(data[0].id);
+       }
+     } catch (error) {
+       console.error('Failed to fetch accounts:', error);
+@@ -68,6 +88,15 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
+     await invoke('update_account_password', { email, password });
+   };
+ 
++  const discoverAccountSettings = async (email: string) => {
++    try {
++      return await invoke('discover_account_settings', { email }) as AccountDiscoveryResult;
++    } catch (error) {
++      console.error('Failed to discover account settings:', error);
++      throw error;
++    }
++  };
++
+   return (
+     <AccountContext.Provider value={{ 
+       accounts, 
+@@ -76,7 +105,8 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
+       loading, 
+       refreshAccounts: fetchAccounts,
+       updateAccount,
+-      updatePassword
++      updatePassword,
++      discoverAccountSettings
+     }}>
+       {children}
+     </AccountContext.Provider>

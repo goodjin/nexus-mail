@@ -1,0 +1,14 @@
+{
+  "projectId": "nexus-mail",
+  "version": "v1",
+  "startTime": "2026-04-27T05:39:45Z",
+  "lastUpdateTime": "2026-04-27T05:39:45Z",
+  "status": "in_progress",
+  "currentTask": "T-01",
+  "completedTasks": [],
+  "failedTasks": [],
+  "pendingTasks": ["T-01", "T-02", "T-03", "T-04", "T-05", "T-06"],
+  "totalTasks": 6,
+  "progress": 0,
+  "errors": []
+}

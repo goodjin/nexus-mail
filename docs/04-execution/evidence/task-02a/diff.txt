@@ -1,0 +1,898 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index ad17e86..6974545 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -9,12 +9,25 @@ import { ComposeModal } from "./components/mail/ComposeModal";
+ import { SettingsModal } from "./components/settings/SettingsModal";
+ import "./App.css";
+ 
++type ComposePreset = {
++  to?: string;
++  cc?: string;
++  bcc?: string;
++  subject?: string;
++  body?: string;
++};
++
+ const App: React.FC = () => {
+   const { 
+     accounts, 
+     selectedAccount, 
+     setSelectedAccount
+   } = useAccountContext();
++  const selectedAccountInfo = React.useMemo(
++    () => accounts.find((account) => account.id === selectedAccount) ?? null,
++    [accounts, selectedAccount]
++  );
++  const selectedAccountEmail = selectedAccountInfo?.email ?? null;
+ 
+   const {
+     folders,
+@@ -22,6 +35,7 @@ const App: React.FC = () => {
+     selectedFolderId,
+     setSelectedFolderId,
+     loading: emailsLoading,
++    foldersLoading,
+     syncing,
+     sync,
+     fetchEmailDetails,
+@@ -30,79 +44,310 @@ const App: React.FC = () => {
+     markAsRead,
+     loadMore,
+     searchQuery,
+-    setSearchQuery
+-  } = useMailbox(selectedAccount);
++    setSearchQuery,
++    searchFilters,
++    setSearchFilters,
++    searchHistory,
++    clearSearchHistory,
++    applyEmailAction,
++    moveEmails
++  } = useMailbox(selectedAccountEmail);
+ 
+   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
++  const [composePreset, setComposePreset] = useState<ComposePreset | undefined>(undefined);
++  const [detailStatus, setDetailStatus] = useState<{ state: "idle" | "loading" | "error"; message?: string }>({ state: "idle" });
++  const [sessionAccountIssues, setSessionAccountIssues] = useState<Record<string, { state: "error"; message?: string }>>({});
++  const accountIssues = React.useMemo(() => {
++    const backendIssues = accounts.reduce<Record<string, { state: "error"; message?: string }>>((acc, account) => {
++      if (account.status !== "normal") {
++        acc[account.id] = { state: "error", message: account.last_error ?? `Account status: ${account.status}` };
++      }
++      return acc;
++    }, {});
++    return { ...backendIssues, ...sessionAccountIssues };
++  }, [accounts, sessionAccountIssues]);
++
++  const isAccountIssue = (message: string) => {
++    const normalized = message.toLowerCase();
++    return (
++      normalized.includes("password") ||
++      normalized.includes("auth") ||
++      normalized.includes("login") ||
++      normalized.includes("credential") ||
++      normalized.includes("imap") ||
++      normalized.includes("smtp")
++    );
++  };
++
++  const recordAccountIssue = (message: string) => {
++    if (!selectedAccount) return;
++    if (!isAccountIssue(message)) return;
++    setSessionAccountIssues((prev) => ({
++      ...prev,
++      [selectedAccount]: { state: "error", message },
++    }));
++  };
++
++  const clearAccountIssue = () => {
++    if (!selectedAccount) return;
++    setSessionAccountIssues((prev) => {
++      if (!prev[selectedAccount]) return prev;
++      const next = { ...prev };
++      delete next[selectedAccount];
++      return next;
++    });
++  };
++
++  useEffect(() => {
++    setSelectedEmail(null);
++    setDetailStatus({ state: "idle" });
++  }, [selectedAccount]);
++
++  useEffect(() => {
++    setSelectedEmail(null);
++    setDetailStatus({ state: "idle" });
++  }, [selectedFolderId]);
+   
+   // Sync selectedEmail with the emails array if it was updated by pre-fetch
+   const effectiveEmail = React.useMemo(() => {
+     if (!selectedEmail) return null;
+-    return emails.find(e => e.uid === selectedEmail.uid) || selectedEmail;
++    const listEmail = emails.find(e => e.uid === selectedEmail.uid);
++    if (!listEmail) return selectedEmail;
++    const hasDetails = Boolean(
++      selectedEmail.body_html ||
++      selectedEmail.body_text ||
++      (selectedEmail.attachments && selectedEmail.attachments.length > 0)
++    );
++    return hasDetails ? { ...listEmail, ...selectedEmail } : listEmail;
+   }, [emails, selectedEmail]);
+   
+   // Fetch full details when email is selected
+   useEffect(() => {
+-    if (effectiveEmail && !effectiveEmail.body_html && !effectiveEmail.body_text) {
++    const needsDetails = effectiveEmail && (
++      (!effectiveEmail.body_html && !effectiveEmail.body_text) ||
++      !effectiveEmail.attachments
++    );
++    if (needsDetails) {
++      let isCancelled = false;
++      const uid = effectiveEmail.uid;
+       const getDetails = async () => {
+         try {
+-          const fullEmail = await fetchEmailDetails(effectiveEmail.uid);
+-          setSelectedEmail({ ...effectiveEmail, ...fullEmail });
++          setDetailStatus({ state: "loading" });
++          const fullEmail = await fetchEmailDetails(uid);
++          if (!isCancelled) {
++            setSelectedEmail((prev) => (prev?.uid === uid ? { ...prev, ...fullEmail } : prev));
++            setDetailStatus({ state: "idle" });
++            clearAccountIssue();
++          }
+         } catch (e) {
++          const message = e instanceof Error ? e.message : String(e);
+           console.error("Fetch details failed", e);
++          if (!isCancelled) {
++            setDetailStatus({ state: "error", message });
++            recordAccountIssue(message);
++          }
+         }
+       };
+       getDetails();
++      return () => {
++        isCancelled = true;
++      };
+     }
++    setDetailStatus({ state: "idle" });
++    return undefined;
+   }, [effectiveEmail?.uid]);
+   const [isComposeOpen, setIsComposeOpen] = useState(false);
+   const [settingsState, setSettingsState] = useState<{ isOpen: boolean, initialTab?: 'general' | 'accounts', initialAction?: 'add_account' }>({ isOpen: false });
+-  const [statusMsg, setStatusMsg] = useState<string | null>(null);
++  const [syncStatus, setSyncStatus] = useState<{ type: "loading" | "success" | "error"; message: string } | null>(null);
++
++  const escapeHtml = (value: string) =>
++    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
++
++  const buildQuotedBody = (email: Email) => {
++    const fallbackText = email.body_text || email.snippet || "";
++    const rawBody = email.body_html
++      ? email.body_html
++      : `<p>${escapeHtml(fallbackText).replace(/\n/g, "<br />")}</p>`;
++    const metaLines = [
++      "<p>--- Original Message ---</p>",
++      `<p>From: ${escapeHtml(email.from)}</p>`,
++      email.to?.length ? `<p>To: ${escapeHtml(email.to.join(", "))}</p>` : "",
++      `<p>Subject: ${escapeHtml(email.subject || "")}</p>`
++    ].filter(Boolean).join("");
++    return `<p></p>${metaLines}<blockquote>${rawBody}</blockquote>`;
++  };
++
++  const withSubjectPrefix = (prefix: string, subject?: string) => {
++    const trimmed = subject?.trim() ?? "";
++    if (!trimmed) return prefix.trim();
++    return trimmed.toLowerCase().startsWith(prefix.toLowerCase()) ? trimmed : `${prefix}${trimmed}`;
++  };
++
++  const handleCloseCompose = () => {
++    setIsComposeOpen(false);
++    setComposePreset(undefined);
++  };
+ 
+   // Auto-hide status messages
+   useEffect(() => {
+-    if (statusMsg) {
+-      const timer = setTimeout(() => setStatusMsg(null), 3000);
+-      return () => clearTimeout(timer);
+-    }
+-  }, [statusMsg]);
++    if (!syncStatus || syncStatus.type === "loading") return;
++    const timer = setTimeout(() => setSyncStatus(null), 3000);
++    return () => clearTimeout(timer);
++  }, [syncStatus]);
+ 
+   const handleSync = async () => {
++    if (syncing) return;
+     try {
+-      setStatusMsg("Syncing account...");
++      setSyncStatus({ type: "loading", message: "Syncing account..." });
+       await sync();
+-      setStatusMsg("Sync completed!");
++      setSyncStatus({ type: "success", message: "Sync completed!" });
++      clearAccountIssue();
+     } catch (e) {
+-      setStatusMsg("Sync failed: " + e);
++      const message = e instanceof Error ? e.message : String(e);
++      setSyncStatus({ type: "error", message: `Sync failed: ${message}` });
++      recordAccountIssue(message);
+     }
+   };
+ 
++  const focusSearchInput = React.useCallback(() => {
++    if (typeof document === "undefined") return;
++    const input = document.querySelector<HTMLInputElement>('[data-testid="search-input"]');
++    if (input) {
++      input.focus();
++      input.select();
++    }
++  }, []);
++
++  const isEditableTarget = (target: EventTarget | null) => {
++    if (!(target instanceof HTMLElement)) return false;
++    const tag = target.tagName.toLowerCase();
++    return tag === "input" || tag === "textarea" || target.isContentEditable;
++  };
++
++  useEffect(() => {
++    const handleKeydown = (event: KeyboardEvent) => {
++      const modKey = event.metaKey || event.ctrlKey;
++      if (!modKey || isEditableTarget(event.target)) return;
++      const key = event.key.toLowerCase();
++      if (key === "n") {
++        event.preventDefault();
++        setComposePreset(undefined);
++        setIsComposeOpen(true);
++      }
++      if (key === "k") {
++        event.preventDefault();
++        focusSearchInput();
++      }
++      if (key === ",") {
++        event.preventDefault();
++        setSettingsState({ isOpen: true, initialTab: 'general' });
++      }
++      if (key === "s" && event.shiftKey) {
++        event.preventDefault();
++        handleSync();
++      }
++    };
++    window.addEventListener("keydown", handleKeydown);
++    return () => window.removeEventListener("keydown", handleKeydown);
++  }, [focusSearchInput, handleSync]);
++
+   const currentFolder = folders.find(f => f.id === selectedFolderId);
+ 
++  useEffect(() => {
++    if (!import.meta.env.DEV || typeof window === "undefined") return;
++      const global = window as typeof window & {
++        __nexusTest?: {
++          getFirstEmail: () => Email | null;
++          selectEmailByUid: (uid: string) => void;
++          openReplyForFirstEmail: () => void;
++          openForwardForFirstEmail: () => void;
++        };
++      };
++      global.__nexusTest = {
++        getFirstEmail: () => emails[0] ?? null,
++        selectEmailByUid: (uid: string) => {
++          const email = emails.find(item => item.uid === uid);
++          if (!email) return;
++          setSelectedEmail(email);
++          const isUnread = !email.flags?.includes("\\Seen");
++          if (isUnread) {
++            markAsRead(email.uid, true);
++          }
++        },
++        openReplyForFirstEmail: () => {
++          const email = emails[0];
++          if (!email) return;
++          setComposePreset({
++            to: email.from,
++          subject: withSubjectPrefix("Re: ", email.subject),
++          body: buildQuotedBody(email)
++        });
++        setIsComposeOpen(true);
++      },
++      openForwardForFirstEmail: () => {
++        const email = emails[0];
++        if (!email) return;
++        setComposePreset({
++          subject: withSubjectPrefix("Fwd: ", email.subject),
++          body: buildQuotedBody(email)
++        });
++        setIsComposeOpen(true);
++      }
++    };
++    return () => {
++      delete global.__nexusTest;
++    };
++  }, [emails, buildQuotedBody, withSubjectPrefix]);
++  const handleFolderDrop = async (folderId: string, uids: string[]) => {
++    if (!selectedFolderId || folderId === selectedFolderId) return;
++    try {
++      await moveEmails(uids, folderId);
++      if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
++        setSelectedEmail(null);
++      }
++    } catch (e) {
++      console.error("Folder drop move failed", e);
++    }
++  };
++
+   return (
+     <div className="flex h-screen w-full bg-nexus-background overflow-hidden text-nexus-foreground">
+       {/* Toast Notification */}
+-      {statusMsg && (
++      {syncStatus && (
+         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
+-          <Badge className="px-4 py-2 shadow-lg animate-in fade-in slide-in-from-bottom-4">
+-            {statusMsg}
++          <Badge
++            className={`px-4 py-2 shadow-lg animate-in fade-in slide-in-from-bottom-4 ${
++              syncStatus.type === "error"
++                ? "bg-red-500 text-white"
++                : syncStatus.type === "success"
++                ? "bg-emerald-500 text-white"
++                : "bg-nexus-accent text-white"
++            }`}
++          >
++            {syncStatus.message}
+           </Badge>
+         </div>
+       )}
+ 
+       {/* Layers */}
+       <Sidebar 
+-        accounts={accounts.map(a => a.email)}
++        accounts={accounts}
++        accountIssues={accountIssues}
+         selectedAccount={selectedAccount}
+         onAccountChange={setSelectedAccount}
+         folders={folders}
++        isFolderLoading={foldersLoading}
+         selectedFolderId={selectedFolderId}
+         onFolderSelect={setSelectedFolderId}
+         onSync={handleSync}
+         isSyncing={syncing}
+-        onCompose={() => setIsComposeOpen(true)}
++        onCompose={() => {
++          setComposePreset(undefined);
++          setIsComposeOpen(true);
++        }}
+         onSettings={() => setSettingsState({ isOpen: true, initialTab: 'general' })}
+         onAddAccount={() => setSettingsState({ isOpen: true, initialTab: 'accounts', initialAction: 'add_account' })}
++        onFolderDrop={handleFolderDrop}
+       />
+ 
+       <EmailList 
+@@ -117,12 +362,47 @@ const App: React.FC = () => {
+         }}
+         folderName={currentFolder?.name || "Inbox"}
+         isLoading={emailsLoading}
++        isFolderLoading={foldersLoading}
++        hasFolder={Boolean(selectedFolderId)}
+         searchQuery={searchQuery}
+         onSearchChange={setSearchQuery}
++        searchFilters={searchFilters}
++        onSearchFiltersChange={setSearchFilters}
++        searchHistory={searchHistory}
++        onClearSearchHistory={clearSearchHistory}
++        folders={folders}
++        currentFolderId={selectedFolderId}
++        onApplyEmailAction={async (uids, action) => {
++          try {
++            await applyEmailAction(uids, action);
++            clearAccountIssue();
++          } catch (e) {
++            const message = e instanceof Error ? e.message : String(e);
++            recordAccountIssue(message);
++            throw e;
++          }
++        }}
++        onMoveEmails={async (uids, targetFolderId) => {
++          try {
++            await moveEmails(uids, targetFolderId);
++            clearAccountIssue();
++          } catch (e) {
++            const message = e instanceof Error ? e.message : String(e);
++            recordAccountIssue(message);
++            throw e;
++          }
++        }}
+         onDeleteEmails={async (uids) => {
+-            await deleteEmails(uids);
+-            if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
+-                setSelectedEmail(null);
++            try {
++              await deleteEmails(uids);
++              if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
++                  setSelectedEmail(null);
++              }
++              clearAccountIssue();
++            } catch (e) {
++              const message = e instanceof Error ? e.message : String(e);
++              recordAccountIssue(message);
++              throw e;
+             }
+         }}
+         onLoadMore={loadMore}
+@@ -130,9 +410,17 @@ const App: React.FC = () => {
+ 
+       <EmailDetail 
+         email={effectiveEmail}
++        detailStatus={detailStatus}
+         onDelete={async (uid: string) => {
+-            await deleteEmails([uid]);
+-            setSelectedEmail(null);
++            try {
++              await deleteEmails([uid]);
++              setSelectedEmail(null);
++              clearAccountIssue();
++            } catch (e) {
++              const message = e instanceof Error ? e.message : String(e);
++              setDetailStatus({ state: "error", message });
++              recordAccountIssue(message);
++            }
+         }}
+         onToggleFlag={async (uid: string, flags: string[]) => {
+             await toggleFlag(uid, flags);
+@@ -154,13 +442,29 @@ const App: React.FC = () => {
+                 setSelectedEmail({ ...selectedEmail, flags: newFlags });
+             }
+         }}
++        onReply={(email) => {
++          setComposePreset({
++            to: email.from,
++            subject: withSubjectPrefix("Re: ", email.subject),
++            body: buildQuotedBody(email)
++          });
++          setIsComposeOpen(true);
++        }}
++        onForward={(email) => {
++          setComposePreset({
++            subject: withSubjectPrefix("Fwd: ", email.subject),
++            body: buildQuotedBody(email)
++          });
++          setIsComposeOpen(true);
++        }}
+       />
+ 
+-      {selectedAccount && (
++      {selectedAccountInfo && (
+         <ComposeModal 
+           isOpen={isComposeOpen}
+-          onClose={() => setIsComposeOpen(false)}
+-          fromAccount={selectedAccount}
++          onClose={handleCloseCompose}
++          fromAccount={selectedAccountInfo.email}
++          initialValues={composePreset}
+         />
+       )}
+ 
+diff --git a/src/components/settings/SettingsModal.tsx b/src/components/settings/SettingsModal.tsx
+index 4829d1d..3710866 100644
+--- a/src/components/settings/SettingsModal.tsx
++++ b/src/components/settings/SettingsModal.tsx
+@@ -1,5 +1,5 @@
+ import React, { useState, useEffect } from 'react';
+-import { X, Shield, Download, History, Users, Server, Lock, Globe, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
++import { X, Shield, Download, History, Users, Server, Lock, Globe, CheckCircle2, AlertCircle, Loader2, Sun, Moon, Monitor } from 'lucide-react';
+ import { Button } from '../ui/Button';
+ import { useSettings } from '../../hooks/useSettings';
+ import { useAccountContext, AccountInfo } from '../../context/AccountContext';
+@@ -18,7 +18,7 @@ type TabType = 'general' | 'accounts';
+ 
+ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab = 'general', initialAction }) => {
+   const { settings, updateSetting } = useSettings();
+-  const { accounts, updateAccount, updatePassword } = useAccountContext();
++  const { accounts, updateAccount, updatePassword, discoverAccountSettings } = useAccountContext();
+   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+   
+@@ -26,8 +26,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+   const [editForm, setEditForm] = useState<AccountInfo | null>(null);
+   const [newPassword, setNewPassword] = useState('');
+   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
++  const [saveError, setSaveError] = useState<string | null>(null);
+   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+   const [testError, setTestError] = useState<string | null>(null);
++  const [discoveryStatus, setDiscoveryStatus] = useState<'idle' | 'discovering' | 'success' | 'error'>('idle');
++  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
++  const [authMethod, setAuthMethod] = useState<'password' | 'oauth'>('password');
+ 
+   const selectedAccount = accounts.find(a => a.id === selectedAccountId);
+ 
+@@ -35,6 +39,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+     if (selectedAccount) {
+       setEditForm({ ...selectedAccount });
+       setNewPassword('');
++      setAuthMethod('password');
+     }
+   }, [selectedAccountId, selectedAccount]);
+ 
+@@ -52,35 +57,77 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+             imap_use_tls: true,
+             smtp_host: '127.0.0.1',
+             smtp_port: 465,
+-            smtp_use_tls: true
++            smtp_use_tls: true,
++            sync_enabled: true,
++            sync_interval: 15,
++            last_sync: null,
++            status: 'normal',
++            last_error: null,
+         });
+         setNewPassword('');
++        setAuthMethod('password');
+       } else {
+         setSelectedAccountId(null);
+         setEditForm(null);
++        setAuthMethod('password');
+       }
+     }
+   }, [isOpen, initialTab, initialAction]);
+ 
+   if (!isOpen) return null;
+ 
++  const isNewAccount = selectedAccountId === 'new';
++  const isPasswordAuth = authMethod === 'password';
++  const hasImapPort = Number.isFinite(editForm?.imap_port);
++  const hasSmtpPort = Number.isFinite(editForm?.smtp_port);
++  const requiredFieldsMissing = !editForm?.email?.trim()
++    || !editForm?.imap_host?.trim()
++    || !editForm?.smtp_host?.trim()
++    || !hasImapPort
++    || !hasSmtpPort
++    || (isNewAccount && isPasswordAuth && !newPassword);
++  const isSaveDisabled = saveStatus === 'saving' || requiredFieldsMissing;
++  const isTestDisabled = testStatus === 'testing' || requiredFieldsMissing;
++
++  const formatAccountError = (error: unknown) => {
++    const message = error instanceof Error ? error.message : String(error);
++    const normalized = message.toLowerCase();
++    if (normalized.includes('invalid password') || normalized.includes('auth')) {
++      return '认证失败，请检查密码或授权方式。';
++    }
++    if (normalized.includes('timeout') || normalized.includes('timed out')) {
++      return '连接超时，请确认网络和服务器地址。';
++    }
++    if (normalized.includes('network')) {
++      return '网络异常，请检查网络连接。';
++    }
++    if (normalized.includes('connection') || normalized.includes('connect')) {
++      return '连接失败，请确认服务器地址、端口和协议配置。';
++    }
++    return message || '发生未知错误，请稍后重试。';
++  };
++
+   const handleSaveAccount = async () => {
+-    if (!editForm) return;
++    if (!editForm || isSaveDisabled) return;
+     try {
+       setSaveStatus('saving');
++      setSaveError(null);
+       await updateAccount(editForm);
+       if (newPassword) {
+         await updatePassword(editForm.email, newPassword);
+       }
+       setSaveStatus('success');
++      setSaveError(null);
+       setTimeout(() => setSaveStatus('idle'), 2000);
+     } catch (e) {
++      console.error('Failed to save account:', e);
+       setSaveStatus('error');
++      setSaveError(formatAccountError(e));
+     }
+   };
+ 
+   const handleTestConnection = async () => {
+-    if (!editForm) return;
++    if (!editForm || isTestDisabled) return;
+     try {
+       setTestStatus('testing');
+       setTestError(null);
+@@ -95,10 +142,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+         password: newPassword || null,
+       });
+       setTestStatus('success');
++      setTestError(null);
+       setTimeout(() => setTestStatus('idle'), 3000);
+     } catch (e: any) {
++      console.error('Failed to test connection:', e);
+       setTestStatus('error');
+-      setTestError(e.toString());
++      setTestError(formatAccountError(e));
++    }
++  };
++
++  const handleAutoDiscover = async () => {
++    if (!editForm?.email) return;
++    try {
++      setDiscoveryStatus('discovering');
++      setDiscoveryError(null);
++      const result = await discoverAccountSettings(editForm.email);
++      const hasResult = Boolean(
++        result
++        && (result.imap_host || result.smtp_host || result.imap_port || result.smtp_port)
++      );
++      if (!hasResult) {
++        throw new Error('未找到可用配置，请手动填写。');
++      }
++      setEditForm((current) => current ? ({
++        ...current,
++        imap_host: result?.imap_host ?? current.imap_host,
++        imap_port: result?.imap_port ?? current.imap_port,
++        imap_use_tls: result?.imap_use_tls ?? current.imap_use_tls,
++        smtp_host: result?.smtp_host ?? current.smtp_host,
++        smtp_port: result?.smtp_port ?? current.smtp_port,
++        smtp_use_tls: result?.smtp_use_tls ?? current.smtp_use_tls,
++      }) : current);
++      setDiscoveryStatus('success');
++      setTimeout(() => setDiscoveryStatus('idle'), 3000);
++    } catch (error) {
++      setDiscoveryStatus('error');
++      setDiscoveryError(formatAccountError(error));
+     }
+   };
+ 
+@@ -139,6 +218,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+       </button>
+     </div>
+   );
++  const themeOptions = [
++    {
++      value: 'light' as const,
++      label: 'Light',
++      description: 'Always use light mode.',
++      icon: Sun,
++    },
++    {
++      value: 'dark' as const,
++      label: 'Dark',
++      description: 'Always use dark mode.',
++      icon: Moon,
++    },
++    {
++      value: 'system' as const,
++      label: 'System',
++      description: 'Match your device appearance.',
++      icon: Monitor,
++    },
++  ];
++  const shortcutItems = [
++    { label: 'New message', keys: ['⌘/Ctrl', 'N'] },
++    { label: 'Search', keys: ['⌘/Ctrl', 'K'] },
++    { label: 'Open settings', keys: ['⌘/Ctrl', ','] },
++    { label: 'Sync mailbox', keys: ['⌘/Ctrl', 'Shift', 'S'] },
++  ];
+ 
+   return (
+     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+@@ -180,6 +285,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+         <div className="flex-1 overflow-hidden flex">
+           {activeTab === 'general' && (
+             <div className="flex-1 overflow-y-auto p-8 space-y-8">
++              <section>
++                <h3 className="text-sm font-semibold text-nexus-muted uppercase tracking-wider mb-4 px-1">Appearance</h3>
++                <div className="grid gap-3 sm:grid-cols-3">
++                  {themeOptions.map((option) => {
++                    const Icon = option.icon;
++                    const isActive = settings.theme === option.value;
++                    return (
++                      <button
++                        key={option.value}
++                        type="button"
++                        data-testid={`theme-option-${option.value}`}
++                        onClick={() => updateSetting('theme', option.value)}
++                        className={cn(
++                          "text-left border rounded-xl p-4 transition-all hover:border-nexus-accent",
++                          isActive ? "border-nexus-accent bg-nexus-accent/10" : "border-nexus-muted/20"
++                        )}
++                      >
++                        <div className="flex items-center gap-2">
++                          <Icon className={cn("w-4 h-4", isActive ? "text-nexus-accent" : "text-nexus-muted")} />
++                          <span className="text-sm font-semibold text-nexus-foreground">{option.label}</span>
++                        </div>
++                        <p className="text-xs text-nexus-muted mt-2">{option.description}</p>
++                      </button>
++                    );
++                  })}
++                </div>
++              </section>
++
++              <section>
++                <h3 className="text-sm font-semibold text-nexus-muted uppercase tracking-wider mb-4 px-1">Keyboard Shortcuts</h3>
++                <div className="space-y-2">
++                  {shortcutItems.map((item) => (
++                    <div
++                      key={item.label}
++                      className="flex items-center justify-between rounded-lg border border-nexus-muted/20 bg-nexus-muted/5 px-4 py-3"
++                    >
++                      <span className="text-sm text-nexus-foreground">{item.label}</span>
++                      <div className="flex items-center gap-1">
++                        {item.keys.map((key) => (
++                          <kbd
++                            key={`${item.label}-${key}`}
++                            className="rounded-md border border-nexus-muted/30 bg-nexus-background px-2 py-1 text-[11px] font-semibold text-nexus-muted"
++                          >
++                            {key}
++                          </kbd>
++                        ))}
++                      </div>
++                    </div>
++                  ))}
++                </div>
++              </section>
++
+               <section>
+                 <h3 className="text-sm font-semibold text-nexus-muted uppercase tracking-wider mb-4 px-1">Performance & Sync</h3>
+                 <div className="space-y-2">
+@@ -231,8 +388,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                       )}
+                     >
+                       <div className="font-medium truncate">{acc.display_name || acc.email}</div>
+-                      <div className={cn("text-xs truncate", selectedAccountId === acc.id ? "text-white/80" : "text-nexus-muted/60")}>
+-                        {acc.email}
++                      <div className="flex items-center gap-2">
++                        <div className={cn("text-xs truncate", selectedAccountId === acc.id ? "text-white/80" : "text-nexus-muted/60")}>
++                          {acc.email}
++                        </div>
++                        {acc.status !== 'normal' && (
++                          <span className={cn(
++                            "inline-flex h-2 w-2 rounded-full",
++                            selectedAccountId === acc.id ? "bg-white" : "bg-red-500"
++                          )} />
++                        )}
+                       </div>
+                     </button>
+                   ))}
+@@ -249,7 +414,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                             imap_use_tls: true,
+                             smtp_host: '127.0.0.1',
+                             smtp_port: 465,
+-                            smtp_use_tls: true
++                            smtp_use_tls: true,
++                            sync_enabled: true,
++                            sync_interval: 15,
++                            last_sync: null,
++                            status: 'normal',
++                            last_error: null,
+                         });
+                         setNewPassword('');
+                     }}
+@@ -278,6 +448,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                         <Users className="w-5 h-5 text-nexus-accent" />
+                         Account Details
+                       </h3>
++                      {!isNewAccount && editForm.status !== 'normal' && (
++                        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
++                          <div className="font-semibold">Account requires attention</div>
++                          <div className="mt-1">{editForm.last_error || `Current status: ${editForm.status}`}</div>
++                        </div>
++                      )}
+                       
+                       <div className="space-y-4">
+                         <div className="grid grid-cols-2 gap-4">
+@@ -306,6 +482,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                               className="w-full bg-transparent border p-2 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none" 
+                             />
+                           </div>
++                          <div className="space-y-1 col-span-2">
++                            <label className="text-xs font-semibold text-nexus-muted uppercase tracking-wider">Auth Method</label>
++                            <select
++                              value={authMethod}
++                              onChange={e => setAuthMethod(e.target.value as 'password' | 'oauth')}
++                              className="w-full bg-transparent border p-2 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none"
++                            >
++                              <option value="password">Password</option>
++                              <option value="oauth">OAuth2 (Coming Soon)</option>
++                            </select>
++                            <p className="text-[11px] text-nexus-muted">
++                              {authMethod === 'oauth'
++                                ? 'OAuth2 flow will be available once discovery is enabled.'
++                                : 'Use a dedicated app password if required by your provider.'}
++                            </p>
++                          </div>
+                         </div>
+ 
+                         <div className="space-y-1">
+@@ -317,7 +509,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                               placeholder="Leave blank to keep current"
+                               value={newPassword}
+                               onChange={e => setNewPassword(e.target.value)}
+-                              className="w-full bg-transparent border p-2 pl-10 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none" 
++                              disabled={!isPasswordAuth}
++                              className={cn(
++                                "w-full bg-transparent border p-2 pl-10 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none",
++                                !isPasswordAuth && "opacity-60 cursor-not-allowed"
++                              )}
+                             />
+                           </div>
+                         </div>
+@@ -325,10 +521,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                     </div>
+ 
+                     <div className="space-y-4">
+-                      <h4 className="text-sm font-bold flex items-center gap-2">
+-                        <Server className="w-4 h-4 text-nexus-accent" />
+-                        Server Configuration
+-                      </h4>
++                      <div className="flex items-center justify-between gap-3">
++                        <h4 className="text-sm font-bold flex items-center gap-2">
++                          <Server className="w-4 h-4 text-nexus-accent" />
++                          Server Configuration
++                        </h4>
++                        <Button
++                          variant="ghost"
++                          size="sm"
++                          onClick={handleAutoDiscover}
++                          disabled={!editForm?.email || discoveryStatus === 'discovering'}
++                          className="px-3 text-xs border border-nexus-muted/20"
++                        >
++                          {discoveryStatus === 'discovering' ? (
++                            <span className="flex items-center gap-2">
++                              <Loader2 className="w-3 h-3 animate-spin" />
++                              Detecting...
++                            </span>
++                          ) : 'Auto-Discover'}
++                        </Button>
++                      </div>
++                      {discoveryStatus === 'success' && (
++                        <div className="text-xs text-green-600 flex items-center gap-2">
++                          <CheckCircle2 className="w-3.5 h-3.5" />
++                          Auto-discovery applied. Review and save the settings.
++                        </div>
++                      )}
++                      {discoveryStatus === 'error' && discoveryError && (
++                        <div className="text-xs text-red-600 flex items-center gap-2">
++                          <AlertCircle className="w-3.5 h-3.5" />
++                          {discoveryError}
++                        </div>
++                      )}
+                       
+                       <div className="grid grid-cols-3 gap-4 p-4 bg-nexus-muted/10 rounded-xl border">
+                         <div className="col-span-2 space-y-1">
+@@ -393,7 +617,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                         <Button 
+                           variant="primary" 
+                           onClick={handleSaveAccount}
+-                          disabled={saveStatus === 'saving' || !editForm.email || (selectedAccountId === 'new' && !newPassword)}
++                          disabled={isSaveDisabled}
+                           className={cn("px-8", saveStatus === 'success' && "bg-green-600 hover:bg-green-700")}
+                         >
+                           {saveStatus === 'saving' 
+@@ -406,7 +630,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                         <Button
+                           variant="ghost"
+                           onClick={handleTestConnection}
+-                          disabled={testStatus === 'testing' || !editForm.email || (selectedAccountId === 'new' && !newPassword)}
++                          disabled={isTestDisabled}
+                           className={cn(
+                             "px-4 border border-nexus-muted/20 hover:bg-nexus-muted/5 flex items-center gap-2",
+                             testStatus === 'success' && "text-green-600 border-green-200 bg-green-50",
+@@ -425,7 +649,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                           {testStatus === 'testing' ? 'Testing...' : testStatus === 'success' ? 'Connection OK' : 'Test Connection'}
+                         </Button>
+ 
+-                        {saveStatus === 'error' && <span className="text-xs text-red-500 font-medium">Failed to save. Check your input.</span>}
++                        {saveStatus === 'error' && saveError && (
++                          <div className="w-full mt-2 p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 animate-in fade-in slide-in-from-top-1">
++                            <strong>Save Failed:</strong> {saveError}
++                          </div>
++                        )}
++                        {saveStatus === 'success' && (
++                          <span className="text-xs text-green-600 font-medium">Saved successfully.</span>
++                        )}
++                        {requiredFieldsMissing && (
++                          <span className="text-xs text-nexus-muted font-medium">
++                            Fill in required email and server settings to continue.
++                          </span>
++                        )}
++                        {testStatus === 'success' && (
++                          <span className="text-xs text-green-600 font-medium">Connection successful.</span>
++                        )}
+                         {testStatus === 'error' && testError && (
+                           <div className="w-full mt-2 p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 animate-in fade-in slide-in-from-top-1">
+                             <strong>Test Failed:</strong> {testError}

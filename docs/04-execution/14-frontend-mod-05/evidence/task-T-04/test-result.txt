@@ -1,0 +1,115 @@
+
+> --package-name@0.1.0 test:e2e
+> playwright test compose.spec.ts --reporter=line e2e/interactions.spec.ts
+
+
+Running 5 tests using 5 workers
+
+[1A[2K[1/5] [chromium] › e2e/interactions.spec.ts:28:3 › Interactions and Validations › should handle attachments correctly
+[1A[2K[2/5] [chromium] › e2e/compose.spec.ts:56:3 › Compose and Send Email › should prefill reply and forward content
+[1A[2K[3/5] [chromium] › e2e/compose.spec.ts:14:3 › Compose and Send Email › should open compose modal and send email
+[1A[2K[4/5] [chromium] › e2e/interactions.spec.ts:55:3 › Interactions and Validations › should show visible selection state for emails
+[1A[2K[5/5] [chromium] › e2e/interactions.spec.ts:9:3 › Interactions and Validations › should show error message when sending empty email
+[1A[2K  1) [chromium] › e2e/interactions.spec.ts:55:3 › Interactions and Validations › should show visible selection state for emails 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoHaveCSS[2m([22m[32mexpected[39m[2m)[22m failed
+
+    Locator: locator('[data-testid^="email-card-"]').first()
+    Expected pattern: [32m/rgb\(0, 12[789]/[39m
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toHaveCSS" with timeout 5000ms[22m
+    [2m  - waiting for locator('[data-testid^="email-card-"]').first()[22m
+
+
+      62 |
+      63 |     // Wait for the background to change to blue
+    > 64 |     await expect(emailCards.first()).toHaveCSS('background-color', /rgb\(0, 12[789]/);
+         |                                      ^
+      65 |     
+      66 |     // 3. Verify the 'bg-nexus-selection' class or matching computed style (Blue)
+      67 |     // We can't check the exact Tailwind class easily if it's jitted, but we can check the color
+        at /Users/jin/github/nexus-mail/e2e/interactions.spec.ts:64:38
+
+
+[1A[2K  2) [chromium] › e2e/interactions.spec.ts:9:3 › Interactions and Validations › should show error message when sending empty email 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoHaveText[2m([22m[32mexpected[39m[2m)[22m failed
+
+    Locator: getByTestId('compose-error')
+    Expected pattern: [32m/Please fill in recipient and subject/[39m
+    Received string:  [31m"Please fill in recipient, subject, and body"[39m
+    Timeout: 5000ms
+
+    Call log:
+    [2m  - Expect "toHaveText" with timeout 5000ms[22m
+    [2m  - waiting for getByTestId('compose-error')[22m
+    [2m    9 × locator resolved to <div data-testid="compose-error" class="bg-red-500/10 border border-red-500/20 text-red-500 text-xs p-2 rounded-lg animate-in fade-in slide-in-from-top-2">Please fill in recipient, subject, and body</div>[22m
+    [2m      - unexpected value "Please fill in recipient, subject, and body"[22m
+
+
+      18 |     const errorMsg = page.getByTestId('compose-error');
+      19 |     await expect(errorMsg).toBeVisible();
+    > 20 |     await expect(errorMsg).toHaveText(/Please fill in recipient and subject/);
+         |                            ^
+      21 |
+      22 |     // 4. Input something and click send again - verify it still shows error if other field missing
+      23 |     await page.locator('input[placeholder="recipient@example.com"]').fill('bob@example.com');
+        at /Users/jin/github/nexus-mail/e2e/interactions.spec.ts:20:28
+
+    Error Context: test-results/interactions-Interactions--07fd6-ge-when-sending-empty-email-chromium/error-context.md
+
+
+[1A[2K  3) [chromium] › e2e/compose.spec.ts:56:3 › Compose and Send Email › should prefill reply and forward content 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: getByTestId('action-reply')
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 10000ms[22m
+    [2m  - waiting for getByTestId('action-reply')[22m
+
+
+      62 |     await firstEmail.locator('h3').click();
+      63 |     await expect(page.getByText('Select an email to read')).toBeHidden();
+    > 64 |     await expect(page.getByTestId('action-reply')).toBeVisible({ timeout: 10000 });
+         |                                                    ^
+      65 |
+      66 |     await page.locator('[data-testid="action-reply"]').click();
+      67 |     await expect(page.getByText('New Message')).toBeVisible();
+        at /Users/jin/github/nexus-mail/e2e/compose.spec.ts:64:52
+
+
+[1A[2K  4) [chromium] › e2e/interactions.spec.ts:28:3 › Interactions and Validations › should handle attachments correctly 
+
+    [31mTest timeout of 30000ms exceeded.[39m
+
+    Error: page.waitForEvent: Test timeout of 30000ms exceeded.
+    =========================== logs ===========================
+    waiting for event "filechooser"
+    ============================================================
+
+      34 |
+      35 |     // 2. Simulate File Upload (using the hidden input)
+    > 36 |     const fileChooserPromise = page.waitForEvent('filechooser');
+         |                                     ^
+      37 |     await paperclip.click();
+      38 |     const fileChooser = await fileChooserPromise;
+      39 |     await fileChooser.setFiles({
+        at /Users/jin/github/nexus-mail/e2e/interactions.spec.ts:36:37
+
+    Error Context: test-results/interactions-Interactions--2e747-andle-attachments-correctly-chromium/error-context.md
+
+
+[1A[2K  4 failed
+    [chromium] › e2e/compose.spec.ts:56:3 › Compose and Send Email › should prefill reply and forward content 
+    [chromium] › e2e/interactions.spec.ts:9:3 › Interactions and Validations › should show error message when sending empty email 
+    [chromium] › e2e/interactions.spec.ts:28:3 › Interactions and Validations › should handle attachments correctly 
+    [chromium] › e2e/interactions.spec.ts:55:3 › Interactions and Validations › should show visible selection state for emails 
+  1 passed (31.8s)

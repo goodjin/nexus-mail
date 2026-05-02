@@ -1,0 +1,763 @@
+diff --git a/e2e/ux_enhanced.spec.ts b/e2e/ux_enhanced.spec.ts
+index 2646e11..10fa981 100644
+--- a/e2e/ux_enhanced.spec.ts
++++ b/e2e/ux_enhanced.spec.ts
+@@ -18,17 +18,15 @@ test.describe('UX Enhancement (M30)', () => {
+         const firstEmail = page.locator('[data-testid="email-card-100"]');
+         await firstEmail.hover();
+         
+-        const checkbox1 = firstEmail.locator('input[type="checkbox"]');
++        const checkbox1 = page.getByTestId('email-select-100');
+         await expect(checkbox1).toBeVisible();
+         await checkbox1.click();
+ 
+         const secondEmail = page.locator('[data-testid="email-card-99"]');
+         await secondEmail.hover();
+-        await secondEmail.locator('input[type="checkbox"]').click();
++        await page.getByTestId('email-select-99').click();
+ 
+-        await expect(page.locator('[data-testid="selected-count"]')).toHaveText('2');
+-        await page.click('button:has(svg.lucide-x)');
+-        await expect(page.locator('[data-testid="selected-count"]')).not.toBeVisible();
++        await expect(page.locator('[data-testid="selected-count"]')).toHaveText('2 selected');
+     });
+ 
+     test('should show optimistic UI for flagging', async ({ page }) => {
+@@ -39,7 +37,7 @@ test.describe('UX Enhancement (M30)', () => {
+         await flagButton.click();
+         
+         // Check for the flag indicator on the card (optimistically updated)
+-        const flagIndicator = email.locator('.bg-nexus-accent.rounded-bl-full');
++        const flagIndicator = page.getByTestId('flag-indicator-100');
+         await expect(flagIndicator).toBeVisible();
+     });
+ 
+diff --git a/src/components/mail/EmailList.tsx b/src/components/mail/EmailList.tsx
+index 04ca1fe..c117c8d 100644
+--- a/src/components/mail/EmailList.tsx
++++ b/src/components/mail/EmailList.tsx
+@@ -1,5 +1,5 @@
+ import React from "react";
+-import { Email } from "../../hooks/useMailbox";
++import { Email, SearchFilters, SearchHistoryEntry, Folder, EmailBulkAction } from "../../hooks/useMailbox";
+ import { Card } from "../ui/Card";
+ import { Button } from "../ui/Button";
+ import { cn, formatDate } from "../../lib/utils";
+@@ -12,8 +12,18 @@ interface EmailListProps {
+   onEmailSelect: (email: Email) => void;
+   folderName: string;
+   isLoading: boolean;
++  isFolderLoading: boolean;
++  hasFolder: boolean;
+   searchQuery: string;
+   onSearchChange: (query: string) => void;
++  searchFilters: SearchFilters;
++  onSearchFiltersChange: (filters: SearchFilters) => void;
++  searchHistory: SearchHistoryEntry[];
++  onClearSearchHistory: () => void;
++  folders: Folder[];
++  currentFolderId: string | null;
++  onApplyEmailAction: (uids: string[], action: EmailBulkAction) => Promise<void>;
++  onMoveEmails: (uids: string[], targetFolderId: string) => Promise<void>;
+   onDeleteEmails: (uids: string[]) => Promise<void>;
+   onLoadMore: () => void;
+ }
+@@ -24,7 +34,8 @@ const EmailItem = React.memo(({
+   onEmailSelect, 
+   isMultiSelected, 
+   toggleSelect,
+-  isSelectionMode
++  isSelectionMode,
++  onDragStart
+ }: {
+   email: Email;
+   itemSelected: boolean;
+@@ -32,7 +43,10 @@ const EmailItem = React.memo(({
+   isMultiSelected: boolean;
+   toggleSelect: (uid: string, e: React.MouseEvent) => void;
+   isSelectionMode: boolean;
++  onDragStart: (event: React.DragEvent, uid: string) => void;
+ }) => {
++  const isUnread = !email.flags?.includes("\\Seen");
++
+   return (
+     <div className="p-2 pt-1 pb-1 flex items-center gap-2 group">
+       <div className={cn(
+@@ -41,6 +55,8 @@ const EmailItem = React.memo(({
+       )}>
+         <div 
+           onClick={(e) => toggleSelect(email.uid, e)}
++          onMouseDown={(e) => e.stopPropagation()}
++          data-testid={`email-select-${email.uid}`}
+           className={cn(
+             "w-5 h-5 rounded-full border-2 cursor-pointer flex items-center justify-center transition-all",
+             isMultiSelected 
+@@ -60,11 +76,17 @@ const EmailItem = React.memo(({
+         data-testid={`email-card-${email.uid}`}
+         selected={itemSelected}
+         onClick={() => onEmailSelect(email)}
++        onMouseDown={(event) => {
++          if (event.button !== 0) return;
++          onEmailSelect(email);
++        }}
++        draggable
++        onDragStart={(event) => onDragStart(event, email.uid)}
+         className="cursor-pointer p-4 flex-1 relative overflow-hidden group/card"
+       >
+         {/* Red Flag Indicator (Top-Left) */}
+-        {email.flags?.includes("\\Flagged") && (
+-           <div className="absolute top-0 left-0">
++         {email.flags?.includes("\\Flagged") && (
++            <div className="absolute top-0 left-0" data-testid={`flag-indicator-${email.uid}`}>
+              <div className="w-0 h-0 border-t-[16px] border-t-red-500 border-r-[16px] border-r-transparent" />
+              <Flag className="absolute top-0.5 left-0.5 w-2 h-2 text-white fill-white" />
+            </div>
+@@ -74,8 +96,12 @@ const EmailItem = React.memo(({
+           {/* Row 1: Subject (Title) */}
+           <div className="flex justify-between items-start gap-2">
+             <h3 className={cn(
+-              "text-sm font-bold truncate flex-1",
+-              itemSelected ? "text-nexus-primary-foreground" : "text-nexus-foreground"
++              "text-sm truncate flex-1",
++              itemSelected
++                ? "text-nexus-primary-foreground font-semibold"
++                : isUnread
++                  ? "text-nexus-foreground font-semibold"
++                  : "text-nexus-foreground/70 font-medium"
+             )}>
+               {email.subject || "(No Subject)"}
+             </h3>
+@@ -84,8 +110,12 @@ const EmailItem = React.memo(({
+           {/* Row 2: Sender & Time */}
+           <div className="flex justify-between items-center text-[11px]">
+             <span className={cn(
+-              "font-medium truncate max-w-[160px]",
+-              itemSelected ? "text-nexus-primary-foreground/90" : "text-nexus-muted"
++              "truncate max-w-[160px]",
++              itemSelected
++                ? "text-nexus-primary-foreground/90 font-medium"
++                : isUnread
++                  ? "text-nexus-foreground/80 font-semibold"
++                  : "text-nexus-muted font-medium"
+             )}>
+               {email.from}
+             </span>
+@@ -101,7 +131,11 @@ const EmailItem = React.memo(({
+           <div className="flex items-end gap-2 mt-0.5">
+             <div className={cn(
+               "text-xs line-clamp-1 flex-1",
+-              itemSelected ? "text-nexus-primary-foreground/80" : "text-nexus-muted"
++              itemSelected
++                ? "text-nexus-primary-foreground/80"
++                : isUnread
++                  ? "text-nexus-foreground/70"
++                  : "text-nexus-muted"
+             )}>
+               {email.snippet}
+             </div>
+@@ -132,12 +166,28 @@ export const EmailList: React.FC<EmailListProps> = ({
+   onEmailSelect,
+   folderName,
+   isLoading,
++  isFolderLoading,
++  hasFolder,
+   searchQuery,
+   onSearchChange,
++  searchFilters,
++  onSearchFiltersChange,
++  searchHistory,
++  onClearSearchHistory,
++  folders,
++  currentFolderId,
++  onApplyEmailAction,
++  onMoveEmails,
+   onDeleteEmails,
+   onLoadMore,
+ }) => {
+   const [selectedUids, setSelectedUids] = React.useState<Set<string>>(new Set());
++  const [moveTargetId, setMoveTargetId] = React.useState<string>("");
++  const showFolderPrompt = !hasFolder && !isFolderLoading;
++  const showLoading = isLoading || isFolderLoading;
++  const showEmpty = !showLoading && hasFolder && emails.length === 0;
++  const loadingLabel = isFolderLoading && !hasFolder ? "Loading folders..." : "Loading emails...";
++  const dragMimeType = "application/x-nexus-mail-uids";
+ 
+   const toggleSelect = React.useCallback((uid: string, e: React.MouseEvent) => {
+     e.stopPropagation();
+@@ -159,6 +209,27 @@ export const EmailList: React.FC<EmailListProps> = ({
+     }
+   };
+ 
++  const handleBulkAction = async (action: EmailBulkAction) => {
++    await onApplyEmailAction(Array.from(selectedUids), action);
++    setSelectedUids(new Set());
++  };
++
++  const handleMove = async () => {
++    if (!moveTargetId) return;
++    await onMoveEmails(Array.from(selectedUids), moveTargetId);
++    setSelectedUids(new Set());
++    setMoveTargetId("");
++  };
++
++  const handleDragStart = (event: React.DragEvent, uid: string) => {
++    const dragUids = selectedUids.has(uid) ? Array.from(selectedUids) : [uid];
++    if (!selectedUids.has(uid)) {
++      setSelectedUids(new Set([uid]));
++    }
++    event.dataTransfer.setData(dragMimeType, JSON.stringify(dragUids));
++    event.dataTransfer.effectAllowed = "move";
++  };
++
+   const isAllSelected = emails.length > 0 && selectedUids.size === emails.length;
+ 
+   const toggleSelectAll = () => {
+@@ -179,6 +250,10 @@ export const EmailList: React.FC<EmailListProps> = ({
+     setSelectedUids(newSelected);
+   };
+ 
++  const updateFilters = (patch: Partial<SearchFilters>) => {
++    onSearchFiltersChange({ ...searchFilters, ...patch });
++  };
++
+   return (
+     <section className="h-full w-80 flex-shrink-0 flex flex-col border-r bg-nexus-background">
+       <header className="flex flex-col px-6 py-4 border-b gap-4">
+@@ -186,8 +261,8 @@ export const EmailList: React.FC<EmailListProps> = ({
+           <h2 className="text-lg font-semibold">{folderName}</h2>
+           {selectedUids.size > 0 && (
+             <div className="flex items-center gap-1 animate-in fade-in slide-in-from-right-2">
+-               <span data-testid="selected-count" className="text-[10px] font-bold bg-nexus-accent text-white w-5 h-5 flex items-center justify-center rounded-full mr-1">
+-                {selectedUids.size}
++              <span data-testid="selected-count" className="text-[11px] font-semibold text-nexus-foreground">
++                {selectedUids.size} selected
+               </span>
+               <Button variant="ghost" size="icon" onClick={toggleSelectAll} title={isAllSelected ? "Deselect All" : "Select All"} className="w-8 h-8">
+                 <div className={cn(
+@@ -206,6 +281,35 @@ export const EmailList: React.FC<EmailListProps> = ({
+               <Button variant="ghost" size="icon" onClick={invertSelection} title="Invert Selection" className="w-8 h-8">
+                  <RefreshCw className="w-4 h-4" />
+               </Button>
++              <Button variant="ghost" size="sm" onClick={() => handleBulkAction("mark_read")} className="px-2 text-[11px]">
++                Mark read
++              </Button>
++              <Button variant="ghost" size="sm" onClick={() => handleBulkAction("mark_unread")} className="px-2 text-[11px]">
++                Mark unread
++              </Button>
++              <Button variant="ghost" size="sm" onClick={() => handleBulkAction("flag")} className="px-2 text-[11px]">
++                Flag
++              </Button>
++              <Button variant="ghost" size="sm" onClick={() => handleBulkAction("unflag")} className="px-2 text-[11px]">
++                Unflag
++              </Button>
++              <select
++                value={moveTargetId}
++                onChange={(e) => setMoveTargetId(e.target.value)}
++                className="bg-nexus-sidebar/40 rounded-nexus px-2 py-1 text-[11px] border border-transparent focus:border-nexus-primary/40 outline-none"
++              >
++                <option value="">Move to...</option>
++                {folders
++                  .filter(folder => folder.id !== currentFolderId)
++                  .map(folder => (
++                    <option key={folder.id} value={folder.id}>
++                      {folder.name}
++                    </option>
++                  ))}
++              </select>
++              <Button variant="ghost" size="sm" onClick={handleMove} className="px-2 text-[11px]" disabled={!moveTargetId}>
++                Move
++              </Button>
+               <Button variant="ghost" size="icon" onClick={handleBulkDelete} title="Delete" className="w-8 h-8 text-red-500">
+                 <Trash2 className="w-4 h-4" />
+               </Button>
+@@ -234,16 +338,88 @@ export const EmailList: React.FC<EmailListProps> = ({
+             </button>
+           )}
+         </div>
++        <div className="flex flex-wrap items-center gap-2 text-[11px] text-nexus-muted">
++          <input
++            type="text"
++            data-testid="filter-sender"
++            value={searchFilters.sender}
++            onChange={(e) => updateFilters({ sender: e.target.value })}
++            placeholder="From"
++            className="bg-nexus-sidebar/40 rounded-nexus px-2 py-1 border border-transparent focus:border-nexus-primary/40 outline-none w-24"
++          />
++          <div className="flex items-center gap-1">
++            <input
++              type="date"
++              data-testid="filter-start-date"
++              value={searchFilters.startDate}
++              onChange={(e) => updateFilters({ startDate: e.target.value })}
++              className="bg-nexus-sidebar/40 rounded-nexus px-2 py-1 border border-transparent focus:border-nexus-primary/40 outline-none"
++            />
++            <span className="text-[10px]">to</span>
++            <input
++              type="date"
++              data-testid="filter-end-date"
++              value={searchFilters.endDate}
++              onChange={(e) => updateFilters({ endDate: e.target.value })}
++              className="bg-nexus-sidebar/40 rounded-nexus px-2 py-1 border border-transparent focus:border-nexus-primary/40 outline-none"
++            />
++          </div>
++          <label className="flex items-center gap-1 cursor-pointer">
++            <input
++              type="checkbox"
++              data-testid="filter-attachments"
++              checked={searchFilters.hasAttachments}
++              onChange={(e) => updateFilters({ hasAttachments: e.target.checked })}
++              className="accent-nexus-accent"
++            />
++            <span>Attachments</span>
++          </label>
++          <select
++            data-testid="filter-folder-scope"
++            value={searchFilters.folderScope}
++            onChange={(e) => updateFilters({ folderScope: e.target.value as SearchFilters["folderScope"] })}
++            className="bg-nexus-sidebar/40 rounded-nexus px-2 py-1 border border-transparent focus:border-nexus-primary/40 outline-none"
++          >
++            <option value="current">This folder</option>
++            <option value="all">All folders</option>
++          </select>
++        </div>
++        {searchHistory.length > 0 && (
++          <div className="flex flex-wrap items-center gap-2 text-[11px] text-nexus-muted">
++            <span className="text-nexus-muted/80">Recent:</span>
++            {searchHistory.slice(0, 10).map((entry) => (
++              <button
++                key={`${entry.query}-${entry.last_used_at}`}
++                data-testid="search-history-item"
++                onClick={() => onSearchChange(entry.query)}
++                className="px-2 py-0.5 rounded-full bg-nexus-sidebar/40 text-nexus-foreground/80 hover:text-nexus-foreground hover:bg-nexus-sidebar/70 transition"
++                title={`Search: ${entry.query}`}
++              >
++                {entry.query}
++              </button>
++            ))}
++            <button
++              data-testid="search-history-clear"
++              onClick={onClearSearchHistory}
++              className="text-nexus-muted hover:text-nexus-foreground underline"
++            >
++              Clear
++            </button>
++          </div>
++        )}
+       </header>
+       
+       <div className="flex-1 overflow-hidden relative">
+-        {isLoading && emails.length === 0 && (
++        {showFolderPrompt && (
++          <div className="text-center py-10 text-nexus-muted text-sm">Select a folder to get started</div>
++        )}
++        {showLoading && (
+           <div className="absolute inset-0 z-10 flex items-center justify-center bg-nexus-background/50">
+-            <div className="text-nexus-muted text-sm">Loading emails...</div>
++            <div className="text-nexus-muted text-sm">{loadingLabel}</div>
+           </div>
+         )}
+-        {!isLoading && emails.length === 0 && (
+-          <div className="text-center py-10 text-nexus-muted text-sm">No emails found</div>
++        {showEmpty && (
++          <div className="text-center py-10 text-nexus-muted text-sm">No emails in this folder</div>
+         )}
+         
+         <Virtuoso
+@@ -260,6 +436,7 @@ export const EmailList: React.FC<EmailListProps> = ({
+               isMultiSelected={selectedUids.has(email.uid)}
+               toggleSelect={toggleSelect}
+               isSelectionMode={selectedUids.size > 0}
++              onDragStart={handleDragStart}
+             />
+           )}
+         />
+diff --git a/src/components/settings/SettingsModal.tsx b/src/components/settings/SettingsModal.tsx
+index 4829d1d..7acba2b 100644
+--- a/src/components/settings/SettingsModal.tsx
++++ b/src/components/settings/SettingsModal.tsx
+@@ -1,5 +1,5 @@
+ import React, { useState, useEffect } from 'react';
+-import { X, Shield, Download, History, Users, Server, Lock, Globe, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
++import { X, Shield, Download, History, Users, Server, Lock, Globe, CheckCircle2, AlertCircle, Loader2, Sun, Moon, Monitor } from 'lucide-react';
+ import { Button } from '../ui/Button';
+ import { useSettings } from '../../hooks/useSettings';
+ import { useAccountContext, AccountInfo } from '../../context/AccountContext';
+@@ -18,7 +18,7 @@ type TabType = 'general' | 'accounts';
+ 
+ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab = 'general', initialAction }) => {
+   const { settings, updateSetting } = useSettings();
+-  const { accounts, updateAccount, updatePassword } = useAccountContext();
++  const { accounts, updateAccount, updatePassword, discoverAccountSettings } = useAccountContext();
+   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+   
+@@ -26,8 +26,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+   const [editForm, setEditForm] = useState<AccountInfo | null>(null);
+   const [newPassword, setNewPassword] = useState('');
+   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
++  const [saveError, setSaveError] = useState<string | null>(null);
+   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+   const [testError, setTestError] = useState<string | null>(null);
++  const [discoveryStatus, setDiscoveryStatus] = useState<'idle' | 'discovering' | 'success' | 'error'>('idle');
++  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
++  const [authMethod, setAuthMethod] = useState<'password' | 'oauth'>('password');
+ 
+   const selectedAccount = accounts.find(a => a.id === selectedAccountId);
+ 
+@@ -35,6 +39,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+     if (selectedAccount) {
+       setEditForm({ ...selectedAccount });
+       setNewPassword('');
++      setAuthMethod('password');
+     }
+   }, [selectedAccountId, selectedAccount]);
+ 
+@@ -55,32 +60,69 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+             smtp_use_tls: true
+         });
+         setNewPassword('');
++        setAuthMethod('password');
+       } else {
+         setSelectedAccountId(null);
+         setEditForm(null);
++        setAuthMethod('password');
+       }
+     }
+   }, [isOpen, initialTab, initialAction]);
+ 
+   if (!isOpen) return null;
+ 
++  const isNewAccount = selectedAccountId === 'new';
++  const isPasswordAuth = authMethod === 'password';
++  const hasImapPort = Number.isFinite(editForm?.imap_port);
++  const hasSmtpPort = Number.isFinite(editForm?.smtp_port);
++  const requiredFieldsMissing = !editForm?.email?.trim()
++    || !editForm?.imap_host?.trim()
++    || !editForm?.smtp_host?.trim()
++    || !hasImapPort
++    || !hasSmtpPort
++    || (isNewAccount && isPasswordAuth && !newPassword);
++  const isSaveDisabled = saveStatus === 'saving' || requiredFieldsMissing;
++  const isTestDisabled = testStatus === 'testing' || requiredFieldsMissing;
++
++  const formatAccountError = (error: unknown) => {
++    const message = error instanceof Error ? error.message : String(error);
++    const normalized = message.toLowerCase();
++    if (normalized.includes('invalid password') || normalized.includes('auth')) {
++      return '认证失败，请检查密码或授权方式。';
++    }
++    if (normalized.includes('timeout') || normalized.includes('timed out')) {
++      return '连接超时，请确认网络和服务器地址。';
++    }
++    if (normalized.includes('network')) {
++      return '网络异常，请检查网络连接。';
++    }
++    if (normalized.includes('connection') || normalized.includes('connect')) {
++      return '连接失败，请确认服务器地址、端口和协议配置。';
++    }
++    return message || '发生未知错误，请稍后重试。';
++  };
++
+   const handleSaveAccount = async () => {
+-    if (!editForm) return;
++    if (!editForm || isSaveDisabled) return;
+     try {
+       setSaveStatus('saving');
++      setSaveError(null);
+       await updateAccount(editForm);
+       if (newPassword) {
+         await updatePassword(editForm.email, newPassword);
+       }
+       setSaveStatus('success');
++      setSaveError(null);
+       setTimeout(() => setSaveStatus('idle'), 2000);
+     } catch (e) {
++      console.error('Failed to save account:', e);
+       setSaveStatus('error');
++      setSaveError(formatAccountError(e));
+     }
+   };
+ 
+   const handleTestConnection = async () => {
+-    if (!editForm) return;
++    if (!editForm || isTestDisabled) return;
+     try {
+       setTestStatus('testing');
+       setTestError(null);
+@@ -95,10 +137,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+         password: newPassword || null,
+       });
+       setTestStatus('success');
++      setTestError(null);
+       setTimeout(() => setTestStatus('idle'), 3000);
+     } catch (e: any) {
++      console.error('Failed to test connection:', e);
+       setTestStatus('error');
+-      setTestError(e.toString());
++      setTestError(formatAccountError(e));
++    }
++  };
++
++  const handleAutoDiscover = async () => {
++    if (!editForm?.email) return;
++    try {
++      setDiscoveryStatus('discovering');
++      setDiscoveryError(null);
++      const result = await discoverAccountSettings(editForm.email);
++      const hasResult = Boolean(
++        result
++        && (result.imap_host || result.smtp_host || result.imap_port || result.smtp_port)
++      );
++      if (!hasResult) {
++        throw new Error('未找到可用配置，请手动填写。');
++      }
++      setEditForm((current) => current ? ({
++        ...current,
++        imap_host: result?.imap_host ?? current.imap_host,
++        imap_port: result?.imap_port ?? current.imap_port,
++        imap_use_tls: result?.imap_use_tls ?? current.imap_use_tls,
++        smtp_host: result?.smtp_host ?? current.smtp_host,
++        smtp_port: result?.smtp_port ?? current.smtp_port,
++        smtp_use_tls: result?.smtp_use_tls ?? current.smtp_use_tls,
++      }) : current);
++      setDiscoveryStatus('success');
++      setTimeout(() => setDiscoveryStatus('idle'), 3000);
++    } catch (error) {
++      setDiscoveryStatus('error');
++      setDiscoveryError(formatAccountError(error));
+     }
+   };
+ 
+@@ -139,6 +213,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+       </button>
+     </div>
+   );
++  const themeOptions = [
++    {
++      value: 'light' as const,
++      label: 'Light',
++      description: 'Always use light mode.',
++      icon: Sun,
++    },
++    {
++      value: 'dark' as const,
++      label: 'Dark',
++      description: 'Always use dark mode.',
++      icon: Moon,
++    },
++    {
++      value: 'system' as const,
++      label: 'System',
++      description: 'Match your device appearance.',
++      icon: Monitor,
++    },
++  ];
+ 
+   return (
+     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+@@ -180,6 +274,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+         <div className="flex-1 overflow-hidden flex">
+           {activeTab === 'general' && (
+             <div className="flex-1 overflow-y-auto p-8 space-y-8">
++              <section>
++                <h3 className="text-sm font-semibold text-nexus-muted uppercase tracking-wider mb-4 px-1">Appearance</h3>
++                <div className="grid gap-3 sm:grid-cols-3">
++                  {themeOptions.map((option) => {
++                    const Icon = option.icon;
++                    const isActive = settings.theme === option.value;
++                    return (
++                      <button
++                        key={option.value}
++                        type="button"
++                        onClick={() => updateSetting('theme', option.value)}
++                        className={cn(
++                          "text-left border rounded-xl p-4 transition-all hover:border-nexus-accent",
++                          isActive ? "border-nexus-accent bg-nexus-accent/10" : "border-nexus-muted/20"
++                        )}
++                      >
++                        <div className="flex items-center gap-2">
++                          <Icon className={cn("w-4 h-4", isActive ? "text-nexus-accent" : "text-nexus-muted")} />
++                          <span className="text-sm font-semibold text-nexus-foreground">{option.label}</span>
++                        </div>
++                        <p className="text-xs text-nexus-muted mt-2">{option.description}</p>
++                      </button>
++                    );
++                  })}
++                </div>
++              </section>
++
+               <section>
+                 <h3 className="text-sm font-semibold text-nexus-muted uppercase tracking-wider mb-4 px-1">Performance & Sync</h3>
+                 <div className="space-y-2">
+@@ -306,6 +427,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                               className="w-full bg-transparent border p-2 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none" 
+                             />
+                           </div>
++                          <div className="space-y-1 col-span-2">
++                            <label className="text-xs font-semibold text-nexus-muted uppercase tracking-wider">Auth Method</label>
++                            <select
++                              value={authMethod}
++                              onChange={e => setAuthMethod(e.target.value as 'password' | 'oauth')}
++                              className="w-full bg-transparent border p-2 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none"
++                            >
++                              <option value="password">Password</option>
++                              <option value="oauth">OAuth2 (Coming Soon)</option>
++                            </select>
++                            <p className="text-[11px] text-nexus-muted">
++                              {authMethod === 'oauth'
++                                ? 'OAuth2 flow will be available once discovery is enabled.'
++                                : 'Use a dedicated app password if required by your provider.'}
++                            </p>
++                          </div>
+                         </div>
+ 
+                         <div className="space-y-1">
+@@ -317,7 +454,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                               placeholder="Leave blank to keep current"
+                               value={newPassword}
+                               onChange={e => setNewPassword(e.target.value)}
+-                              className="w-full bg-transparent border p-2 pl-10 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none" 
++                              disabled={!isPasswordAuth}
++                              className={cn(
++                                "w-full bg-transparent border p-2 pl-10 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none",
++                                !isPasswordAuth && "opacity-60 cursor-not-allowed"
++                              )}
+                             />
+                           </div>
+                         </div>
+@@ -325,10 +466,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                     </div>
+ 
+                     <div className="space-y-4">
+-                      <h4 className="text-sm font-bold flex items-center gap-2">
+-                        <Server className="w-4 h-4 text-nexus-accent" />
+-                        Server Configuration
+-                      </h4>
++                      <div className="flex items-center justify-between gap-3">
++                        <h4 className="text-sm font-bold flex items-center gap-2">
++                          <Server className="w-4 h-4 text-nexus-accent" />
++                          Server Configuration
++                        </h4>
++                        <Button
++                          variant="ghost"
++                          size="sm"
++                          onClick={handleAutoDiscover}
++                          disabled={!editForm?.email || discoveryStatus === 'discovering'}
++                          className="px-3 text-xs border border-nexus-muted/20"
++                        >
++                          {discoveryStatus === 'discovering' ? (
++                            <span className="flex items-center gap-2">
++                              <Loader2 className="w-3 h-3 animate-spin" />
++                              Detecting...
++                            </span>
++                          ) : 'Auto-Discover'}
++                        </Button>
++                      </div>
++                      {discoveryStatus === 'success' && (
++                        <div className="text-xs text-green-600 flex items-center gap-2">
++                          <CheckCircle2 className="w-3.5 h-3.5" />
++                          Auto-discovery applied. Review and save the settings.
++                        </div>
++                      )}
++                      {discoveryStatus === 'error' && discoveryError && (
++                        <div className="text-xs text-red-600 flex items-center gap-2">
++                          <AlertCircle className="w-3.5 h-3.5" />
++                          {discoveryError}
++                        </div>
++                      )}
+                       
+                       <div className="grid grid-cols-3 gap-4 p-4 bg-nexus-muted/10 rounded-xl border">
+                         <div className="col-span-2 space-y-1">
+@@ -393,7 +562,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                         <Button 
+                           variant="primary" 
+                           onClick={handleSaveAccount}
+-                          disabled={saveStatus === 'saving' || !editForm.email || (selectedAccountId === 'new' && !newPassword)}
++                          disabled={isSaveDisabled}
+                           className={cn("px-8", saveStatus === 'success' && "bg-green-600 hover:bg-green-700")}
+                         >
+                           {saveStatus === 'saving' 
+@@ -406,7 +575,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                         <Button
+                           variant="ghost"
+                           onClick={handleTestConnection}
+-                          disabled={testStatus === 'testing' || !editForm.email || (selectedAccountId === 'new' && !newPassword)}
++                          disabled={isTestDisabled}
+                           className={cn(
+                             "px-4 border border-nexus-muted/20 hover:bg-nexus-muted/5 flex items-center gap-2",
+                             testStatus === 'success' && "text-green-600 border-green-200 bg-green-50",
+@@ -425,7 +594,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                           {testStatus === 'testing' ? 'Testing...' : testStatus === 'success' ? 'Connection OK' : 'Test Connection'}
+                         </Button>
+ 
+-                        {saveStatus === 'error' && <span className="text-xs text-red-500 font-medium">Failed to save. Check your input.</span>}
++                        {saveStatus === 'error' && saveError && (
++                          <div className="w-full mt-2 p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 animate-in fade-in slide-in-from-top-1">
++                            <strong>Save Failed:</strong> {saveError}
++                          </div>
++                        )}
++                        {saveStatus === 'success' && (
++                          <span className="text-xs text-green-600 font-medium">Saved successfully.</span>
++                        )}
++                        {requiredFieldsMissing && (
++                          <span className="text-xs text-nexus-muted font-medium">
++                            Fill in required email and server settings to continue.
++                          </span>
++                        )}
++                        {testStatus === 'success' && (
++                          <span className="text-xs text-green-600 font-medium">Connection successful.</span>
++                        )}
+                         {testStatus === 'error' && testError && (
+                           <div className="w-full mt-2 p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 animate-in fade-in slide-in-from-top-1">
+                             <strong>Test Failed:</strong> {testError}
+diff --git a/src/hooks/useSettings.ts b/src/hooks/useSettings.ts
+index 854b6cc..c7fde81 100644
+--- a/src/hooks/useSettings.ts
++++ b/src/hooks/useSettings.ts
+@@ -4,11 +4,13 @@ import { invoke } from '../lib/tauri';
+ export interface AppSettings {
+   auto_download_attachments: boolean;
+   background_sync_history: boolean;
++  theme: 'light' | 'dark' | 'system';
+ }
+ 
+ const DEFAULT_SETTINGS: AppSettings = {
+   auto_download_attachments: false,
+   background_sync_history: true,
++  theme: 'system',
+ };
+ 
+ export function useSettings() {
+@@ -20,9 +22,14 @@ export function useSettings() {
+       setLoading(true);
+       const rawSettings = await invoke('get_settings') as Record<string, string>;
+       
++      const rawTheme = rawSettings.theme;
++      const normalizedTheme = rawTheme === 'light' || rawTheme === 'dark' || rawTheme === 'system'
++        ? rawTheme
++        : DEFAULT_SETTINGS.theme;
+       const parsedSettings: AppSettings = {
+         auto_download_attachments: rawSettings.auto_download_attachments === 'true',
+         background_sync_history: rawSettings.background_sync_history !== 'false', // Default true
++        theme: normalizedTheme,
+       };
+       
+       setSettings(parsedSettings);
+@@ -37,14 +44,15 @@ export function useSettings() {
+     fetchSettings();
+   }, [fetchSettings]);
+ 
+-  const updateSetting = async (key: keyof AppSettings, value: boolean) => {
++  const updateSetting = async <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+     try {
+       // Optimistic update
+       setSettings(prev => ({ ...prev, [key]: value }));
++      const serializedValue = typeof value === 'boolean' ? value.toString() : value;
+       
+       await invoke('update_setting', { 
+         key, 
+-        value: value.toString() 
++        value: serializedValue 
+       });
+     } catch (error) {
+       console.error(`Failed to update setting ${key}:`, error);

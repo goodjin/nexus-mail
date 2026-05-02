@@ -1,0 +1,68 @@
+
+> --package-name@0.1.0 test:e2e
+> playwright test compose.spec.ts --reporter=line e2e/search.spec.ts
+
+
+Running 3 tests using 3 workers
+
+[1A[2K[1/3] [chromium] › e2e/search.spec.ts:9:3 › Search Functionality › should filter emails when searching
+[1A[2K[2/3] [chromium] › e2e/compose.spec.ts:56:3 › Compose and Send Email › should prefill reply and forward content
+[1A[2K[3/3] [chromium] › e2e/compose.spec.ts:14:3 › Compose and Send Email › should open compose modal and send email
+[1A[2K  1) [chromium] › e2e/search.spec.ts:9:3 › Search Functionality › should filter emails when searching 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoHaveCount[2m([22m[32mexpected[39m[2m)[22m failed
+
+    Locator:  locator('[data-testid^="email-card-"]')
+    Expected: [32m100[39m
+    Received: [31m7[39m
+    Timeout:  5000ms
+
+    Call log:
+    [2m  - Expect "toHaveCount" with timeout 5000ms[22m
+    [2m  - waiting for locator('[data-testid^="email-card-"]')[22m
+    [2m    - locator resolved to 1 element[22m
+    [2m    - unexpected value "1"[22m
+    [2m    8 × locator resolved to 7 elements[22m
+    [2m      - unexpected value "7"[22m
+
+
+      12 |     // 1. Initially should have 100 emails (from our mock)
+      13 |     // Wait for the list to load
+    > 14 |     await expect(page.locator('[data-testid^="email-card-"]')).toHaveCount(100);
+         |                                                                ^
+      15 |
+      16 |     // 2. Type "Project"
+      17 |     await searchInput.fill('Project');
+        at /Users/jin/github/nexus-mail/e2e/search.spec.ts:14:64
+
+    Error Context: test-results/search-Search-Functionalit-e21c2-ilter-emails-when-searching-chromium/error-context.md
+
+
+[1A[2K  2) [chromium] › e2e/compose.spec.ts:56:3 › Compose and Send Email › should prefill reply and forward content 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: getByTestId('action-reply')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 5000ms[22m
+    [2m  - waiting for getByTestId('action-reply')[22m
+
+
+      60 |     const fromText = await firstEmail.locator('span').first().innerText();
+      61 |     await firstEmail.click();
+    > 62 |     await expect(page.getByTestId('action-reply')).toBeVisible();
+         |                                                    ^
+      63 |
+      64 |     await page.locator('[data-testid="action-reply"]').click();
+      65 |     await expect(page.getByText('New Message')).toBeVisible();
+        at /Users/jin/github/nexus-mail/e2e/compose.spec.ts:62:52
+
+
+[1A[2K  2 failed
+    [chromium] › e2e/compose.spec.ts:56:3 › Compose and Send Email › should prefill reply and forward content 
+    [chromium] › e2e/search.spec.ts:9:3 › Search Functionality › should filter emails when searching 
+  1 passed (7.7s)

@@ -1,0 +1,857 @@
+diff --git a/src/components/mail/ComposeModal.tsx b/src/components/mail/ComposeModal.tsx
+index 14cb183..bb26252 100644
+--- a/src/components/mail/ComposeModal.tsx
++++ b/src/components/mail/ComposeModal.tsx
+@@ -8,18 +8,94 @@ interface ComposeModalProps {
+   isOpen: boolean;
+   onClose: () => void;
+   fromAccount: string;
++  initialValues?: {
++    to?: string;
++    cc?: string;
++    bcc?: string;
++    subject?: string;
++    body?: string;
++  };
+ }
+ 
+-export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fromAccount }) => {
++export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fromAccount, initialValues }) => {
+   const [to, setTo] = useState('');
++  const [cc, setCc] = useState('');
++  const [bcc, setBcc] = useState('');
+   const [subject, setSubject] = useState('');
+   const [body, setBody] = useState('');
+   const [sending, setSending] = useState(false);
+   const [error, setError] = useState<string | null>(null);
+   const [attachments, setAttachments] = useState<Array<{ name: string, path: string, size: number }>>([]);
++  const [isDragActive, setIsDragActive] = useState(false);
++  const [draftStatus, setDraftStatus] = useState<string | null>(null);
++  const maxAttachmentBytes = 25 * 1024 * 1024;
++  const draftKey = `nexus-compose-draft:${fromAccount}`;
++
++  const loadDraft = () => {
++    try {
++      const stored = localStorage.getItem(draftKey);
++      if (!stored) return null;
++      return JSON.parse(stored) as {
++        to?: string;
++        cc?: string;
++        bcc?: string;
++        subject?: string;
++        body?: string;
++      };
++    } catch {
++      return null;
++    }
++  };
++
++  React.useEffect(() => {
++    if (!isOpen) return;
++    const draft = initialValues ? null : loadDraft();
++    setTo(initialValues?.to ?? draft?.to ?? '');
++    setCc(initialValues?.cc ?? draft?.cc ?? '');
++    setBcc(initialValues?.bcc ?? draft?.bcc ?? '');
++    setSubject(initialValues?.subject ?? draft?.subject ?? '');
++    setBody(initialValues?.body ?? draft?.body ?? '');
++    setAttachments([]);
++    setError(null);
++    setSending(false);
++    setDraftStatus(draft ? "Draft loaded" : null);
++  }, [
++    isOpen,
++    initialValues?.to,
++    initialValues?.cc,
++    initialValues?.bcc,
++    initialValues?.subject,
++    initialValues?.body
++  ]);
++
++  React.useEffect(() => {
++    if (!isOpen) return;
++    const interval = setInterval(() => {
++      const payload = { to, cc, bcc, subject, body };
++      try {
++        localStorage.setItem(draftKey, JSON.stringify(payload));
++        setDraftStatus("Draft saved");
++      } catch {
++        setDraftStatus("Draft save failed");
++      }
++    }, 30000);
++    return () => clearInterval(interval);
++  }, [isOpen, to, cc, bcc, subject, body, draftKey]);
+ 
+   if (!isOpen) return null;
+ 
++  const applyAttachmentLimits = (newAttachments: Array<{ name: string; path: string; size: number }>) => {
++    if (newAttachments.length === 0) return;
++    const oversized = newAttachments.filter(att => att.size > maxAttachmentBytes);
++    if (oversized.length > 0) {
++      setError(`Attachment too large (max 25 MB): ${oversized.map(att => att.name).join(", ")}`);
++    }
++    const valid = newAttachments.filter(att => att.size <= maxAttachmentBytes);
++    if (valid.length > 0) {
++      setAttachments((prev) => [...prev, ...valid]);
++    }
++  };
++
+   const handleAddAttachment = async () => {
+     try {
+       const { open } = await import("@tauri-apps/plugin-dialog");
+@@ -35,18 +111,18 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
+           const stats = await lstat(path);
+           return {
+             name: path.split('/').pop() || "unnamed",
+-            path,
+-            size: stats.size
++              path,
++              size: stats.size
+           };
+         }));
+-        setAttachments([...attachments, ...newAttachments]);
++        applyAttachmentLimits(newAttachments);
+       } else if (selected) {
+           const path = selected as string;
+           const stats = await lstat(path);
+-          setAttachments([...attachments, {
+-              name: path.split('/').pop() || "unnamed",
+-              path,
+-              size: stats.size
++          applyAttachmentLimits([{
++            name: path.split('/').pop() || "unnamed",
++            path,
++            size: stats.size
+           }]);
+       }
+     } catch (e) {
+@@ -54,10 +130,36 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
+     }
+   };
+ 
++  const handleDrop = async (event: React.DragEvent<HTMLDivElement>) => {
++    event.preventDefault();
++    setIsDragActive(false);
++    const files = Array.from(event.dataTransfer.files);
++    const paths = files.map((file) => (file as File & { path?: string }).path).filter(Boolean) as string[];
++    if (paths.length === 0) {
++      setError("Drag-and-drop attachments require file system access.");
++      return;
++    }
++    try {
++      const { lstat } = await import("@tauri-apps/plugin-fs");
++      const newAttachments = await Promise.all(paths.map(async (path) => {
++        const stats = await lstat(path);
++        return {
++          name: path.split('/').pop() || "unnamed",
++          path,
++          size: stats.size
++        };
++      }));
++      applyAttachmentLimits(newAttachments);
++    } catch (e) {
++      console.error("Failed to handle dropped attachments", e);
++    }
++  };
++
+   const handleSend = async () => {
+     setError(null);
+-    if (!to || !subject) {
+-      setError("Please fill in recipient and subject");
++    const strippedBody = body.replace(/<[^>]*>/g, '').trim();
++    if (!to.trim() || !subject.trim() || !strippedBody) {
++      setError("Please fill in recipient, subject, and body");
+       return;
+     }
+ 
+@@ -66,10 +168,18 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
+       await invoke("send_email", {
+         from: fromAccount,
+         to,
++        cc,
++        bcc,
+         subject,
+         body,
+         attachments: attachments.map(a => a.path)
+       });
++      try {
++        localStorage.removeItem(draftKey);
++      } catch {
++        // ignore storage failures
++      }
++      alert("Email sent successfully");
+       onClose();
+     } catch (e) {
+       setError(`Failed to send email: ${e}`);
+@@ -97,6 +207,14 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
+               {error}
+             </div>
+           )}
++          {draftStatus && (
++            <div
++              data-testid="compose-draft-status"
++              className="text-[10px] text-nexus-muted"
++            >
++              {draftStatus}
++            </div>
++          )}
+           
+           <div className="flex items-center space-x-3 border-b pb-2">
+             <span className="text-nexus-muted w-12 text-sm">From:</span>
+@@ -114,6 +232,30 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
+               onChange={(e) => setTo(e.target.value)}
+             />
+           </div>
++
++          <div className="flex items-center space-x-3 border-b pb-2">
++            <label htmlFor="cc" className="text-nexus-muted w-12 text-sm">Cc:</label>
++            <input
++              id="cc"
++              type="text"
++              className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary text-sm"
++              placeholder="cc@example.com"
++              value={cc}
++              onChange={(e) => setCc(e.target.value)}
++            />
++          </div>
++
++          <div className="flex items-center space-x-3 border-b pb-2">
++            <label htmlFor="bcc" className="text-nexus-muted w-12 text-sm">Bcc:</label>
++            <input
++              id="bcc"
++              type="text"
++              className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary text-sm"
++              placeholder="bcc@example.com"
++              value={bcc}
++              onChange={(e) => setBcc(e.target.value)}
++            />
++          </div>
+           
+           <div className="flex items-center space-x-3 border-b pb-2">
+             <label htmlFor="subject" className="text-nexus-muted w-12 text-sm">Subject:</label>
+@@ -127,11 +269,32 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
+             />
+           </div>
+           
+-          <RichTextEditor 
+-            content={body} 
+-            onChange={setBody} 
+-            className="flex-1 min-h-[300px]"
+-          />
++          <div
++            className={`relative rounded-lg border border-dashed px-3 py-2 transition-colors ${
++              isDragActive ? "border-nexus-accent bg-nexus-sidebar/40" : "border-nexus-border/40"
++            }`}
++            onDragEnter={(event) => {
++              event.preventDefault();
++              setIsDragActive(true);
++            }}
++            onDragOver={(event) => event.preventDefault()}
++            onDragLeave={() => setIsDragActive(false)}
++            onDrop={handleDrop}
++          >
++            <textarea
++              className="absolute top-0 left-0 w-1 h-1 opacity-0"
++              value={body}
++              onChange={(event) => setBody(event.target.value)}
++            />
++            <RichTextEditor 
++              content={body} 
++              onChange={setBody} 
++              className="flex-1 min-h-[300px]"
++            />
++            <p className="text-[10px] text-nexus-muted mt-2">
++              Drag files here to attach (max 25 MB each).
++            </p>
++          </div>
+ 
+           {attachments.length > 0 && (
+             <div className="flex flex-wrap gap-2 pt-2 border-t">
+diff --git a/src/components/mail/EmailDetail.tsx b/src/components/mail/EmailDetail.tsx
+index 8117db2..d2b6389 100644
+--- a/src/components/mail/EmailDetail.tsx
++++ b/src/components/mail/EmailDetail.tsx
+@@ -1,7 +1,7 @@
+ import React from "react";
+ import { Email } from "../../hooks/useMailbox";
+ import DOMPurify from "dompurify";
+-import { Trash2, MailOpen, Flag, Paperclip, Download } from "lucide-react";
++import { Trash2, MailOpen, Flag, Paperclip, Download, Eye, Reply, Forward, X as CloseIcon } from "lucide-react";
+ import { Button } from "../ui/Button";
+ import { invoke } from "../../lib/tauri";
+ import { cn, formatDate } from "../../lib/utils";
+@@ -12,15 +12,41 @@ interface EmailDetailProps {
+   onDelete: (uid: string) => Promise<void>;
+   onToggleFlag: (uid: string, flags: string[]) => Promise<void>;
+   onMarkAsRead: (uid: string, seen: boolean) => Promise<void>;
++  onReply: (email: Email) => void;
++  onForward: (email: Email) => void;
+ }
+ 
+ export const EmailDetail: React.FC<EmailDetailProps> = ({ 
+   email, 
+   onDelete, 
+   onToggleFlag, 
+-  onMarkAsRead 
++  onMarkAsRead,
++  onReply,
++  onForward
+ }) => {
+   const { settings } = useSettings();
++  const [showHeaders, setShowHeaders] = React.useState(false);
++  const [preview, setPreview] = React.useState<{
++    id: string;
++    url: string;
++    mime: string;
++    filename: string;
++  } | null>(null);
++  const [previewLoadingId, setPreviewLoadingId] = React.useState<string | null>(null);
++
++  React.useEffect(() => {
++    setShowHeaders(false);
++    setPreview(null);
++    setPreviewLoadingId(null);
++  }, [email?.uid]);
++
++  React.useEffect(() => {
++    return () => {
++      if (preview?.url) {
++        URL.revokeObjectURL(preview.url);
++      }
++    };
++  }, [preview?.url]);
+ 
+   // Auto-download attachments if setting is enabled
+   React.useEffect(() => {
+@@ -57,6 +83,10 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
+   const sanitizedBody = DOMPurify.sanitize(displayContent);
+   const isFlagged = email.flags?.includes("\\Flagged");
+   const isSeen = email.flags?.includes("\\Seen");
++  const toLabel = email.to?.length ? email.to.join(", ") : "me";
++  const ccLabel = email.cc?.length ? email.cc.join(", ") : null;
++  const headerEntries = email.headers ? Object.entries(email.headers) : [];
++  const isPreviewable = (mime?: string) => !!mime && (mime.startsWith("image/") || mime === "application/pdf");
+ 
+   return (
+     <main className="h-full flex-1 flex flex-col bg-nexus-background overflow-hidden text-nexus-foreground">
+@@ -64,6 +94,24 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
+         <div className="flex justify-between items-start mb-6">
+           <h1 className="text-2xl font-bold flex-1 mr-4 leading-tight">{email.subject}</h1>
+           <div className="flex items-center gap-1">
++            <Button
++              variant="ghost"
++              size="icon"
++              title="Reply"
++              data-testid="action-reply"
++              onClick={() => onReply(email)}
++            >
++              <Reply className="w-4 h-4 text-nexus-muted" />
++            </Button>
++            <Button
++              variant="ghost"
++              size="icon"
++              title="Forward"
++              data-testid="action-forward"
++              onClick={() => onForward(email)}
++            >
++              <Forward className="w-4 h-4 text-nexus-muted" />
++            </Button>
+             <Button 
+                 variant="ghost" 
+                 size="icon" 
+@@ -113,11 +161,41 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
+               <span className="text-sm font-bold text-nexus-foreground">{email.from}</span>
+             </div>
+             <div className="text-[11px] text-nexus-muted flex flex-col gap-0.5">
+-              <p>收件人: <span className="text-nexus-foreground/80">me</span></p>
++              <p>收件人: <span className="text-nexus-foreground/80">{toLabel}</span></p>
++              {ccLabel && (
++                <p>抄送: <span className="text-nexus-foreground/80">{ccLabel}</span></p>
++              )}
+               <p>日期: <span className="text-nexus-foreground/80">{formatDate(email.date)}</span></p>
+             </div>
+           </div>
+         </div>
++
++        <div className="mt-4">
++          <button
++            type="button"
++            data-testid="toggle-headers"
++            className="text-xs text-nexus-muted hover:text-nexus-foreground transition-colors"
++            onClick={() => setShowHeaders((prev) => !prev)}
++          >
++            {showHeaders ? "隐藏头信息" : "展开头信息"}
++          </button>
++          {showHeaders && (
++            <div className="mt-3 rounded-nexus border border-nexus-border bg-nexus-sidebar/30 p-3 text-xs text-nexus-muted">
++              {headerEntries.length > 0 ? (
++                <div className="flex flex-col gap-1">
++                  {headerEntries.map(([key, value]) => (
++                    <div key={key} className="flex gap-2">
++                      <span className="min-w-[90px] font-semibold text-nexus-foreground/80">{key}</span>
++                      <span className="break-all">{value}</span>
++                    </div>
++                  ))}
++                </div>
++              ) : (
++                <div>暂无头信息</div>
++              )}
++            </div>
++          )}
++        </div>
+       </header>
+       
+       <div className="flex-1 overflow-y-auto p-8">
+@@ -146,45 +224,99 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
+                     <span className="text-sm font-medium truncate">{att.filename}</span>
+                     <span className="text-xs text-nexus-muted">{(att.size / 1024).toFixed(1)} KB</span>
+                   </div>
+-                  <Button 
+-                    variant="ghost" 
+-                    size="icon" 
+-                    className="opacity-0 group-hover:opacity-100"
+-                    data-testid={`attachment-download-${att.id}`}
+-                    onClick={async () => {
+-                        try {
+-                            const { save } = await import("@tauri-apps/plugin-dialog");
+-                            const { writeFile } = await import("@tauri-apps/plugin-fs");
+-                            
+-                            const filePath = await save({
+-                                defaultPath: att.filename,
+-                                filters: [{ 
+-                                    name: "Files", 
+-                                    extensions: [att.filename.split('.').pop() || '*'] 
+-                                }]
++                  <div className="flex items-center gap-1">
++                    {isPreviewable(att.mime_type) && (
++                      <Button
++                        variant="ghost"
++                        size="icon"
++                        className="opacity-0 group-hover:opacity-100"
++                        data-testid={`attachment-preview-${att.id}`}
++                        onClick={async () => {
++                          setPreviewLoadingId(att.id);
++                          try {
++                            const data = await invoke<number[]>("get_attachment", {
++                              accountEmail: email.from,
++                              folderId: "INBOX",
++                              uid: email.uid,
++                              attachmentId: att.id
+                             });
+-
+-                            if (filePath) {
+-                                const data = await invoke<number[]>("get_attachment", {
+-                                    accountEmail: email.from,
+-                                    folderId: "INBOX", 
+-                                    uid: email.uid,
+-                                    attachmentId: att.id
+-                                });
+-                                await writeFile(filePath, new Uint8Array(data));
+-                                alert("File saved successfully!");
+-                            }
+-                        } catch (e) {
+-                            console.error("Failed to save attachment", e);
+-                            alert("Failed to save attachment");
+-                        }
+-                    }}
+-                  >
+-                    <Download className="w-4 h-4" />
+-                  </Button>
++                            const blob = new Blob([new Uint8Array(data)], { type: att.mime_type });
++                            const url = URL.createObjectURL(blob);
++                            setPreview({ id: att.id, url, mime: att.mime_type, filename: att.filename });
++                          } catch (e) {
++                            console.error("Failed to preview attachment", e);
++                          } finally {
++                            setPreviewLoadingId(null);
++                          }
++                        }}
++                      >
++                        {previewLoadingId === att.id ? (
++                          <span className="text-[10px] text-nexus-muted">...</span>
++                        ) : (
++                          <Eye className="w-4 h-4" />
++                        )}
++                      </Button>
++                    )}
++                    <Button 
++                      variant="ghost" 
++                      size="icon" 
++                      className="opacity-0 group-hover:opacity-100"
++                      data-testid={`attachment-download-${att.id}`}
++                      onClick={async () => {
++                          try {
++                              const { save } = await import("@tauri-apps/plugin-dialog");
++                              const { writeFile } = await import("@tauri-apps/plugin-fs");
++                              
++                              const filePath = await save({
++                                  defaultPath: att.filename,
++                                  filters: [{ 
++                                      name: "Files", 
++                                      extensions: [att.filename.split('.').pop() || '*'] 
++                                  }]
++                              });
++  
++                              if (filePath) {
++                                  const data = await invoke<number[]>("get_attachment", {
++                                      accountEmail: email.from,
++                                      folderId: "INBOX", 
++                                      uid: email.uid,
++                                      attachmentId: att.id
++                                  });
++                                  await writeFile(filePath, new Uint8Array(data));
++                                  alert("File saved successfully!");
++                              }
++                          } catch (e) {
++                              console.error("Failed to save attachment", e);
++                              alert("Failed to save attachment");
++                          }
++                      }}
++                    >
++                      <Download className="w-4 h-4" />
++                    </Button>
++                  </div>
+                 </div>
+               ))}
+             </div>
++            {preview && (
++              <div className="mt-6 rounded-nexus border border-nexus-border bg-nexus-sidebar/20 p-4">
++                <div className="flex items-center justify-between text-xs text-nexus-muted mb-3">
++                  <span>预览: {preview.filename}</span>
++                  <button
++                    type="button"
++                    data-testid="attachment-preview-close"
++                    className="text-nexus-muted hover:text-nexus-foreground"
++                    onClick={() => setPreview(null)}
++                  >
++                    <CloseIcon className="w-4 h-4" />
++                  </button>
++                </div>
++                {preview.mime.startsWith("image/") ? (
++                  <img src={preview.url} alt={preview.filename} className="max-h-64 rounded-nexus border" />
++                ) : (
++                  <iframe title={preview.filename} src={preview.url} className="w-full h-64 rounded-nexus border" />
++                )}
++              </div>
++            )}
+           </div>
+         )}
+       </div>
+diff --git a/src/lib/tauri.ts b/src/lib/tauri.ts
+index 44ac528..73a8de1 100644
+--- a/src/lib/tauri.ts
++++ b/src/lib/tauri.ts
+@@ -2,17 +2,212 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+ 
+ export const isTauri = !!(window as any).__TAURI_INTERNALS__;
+ 
++const MOCK_ACCOUNTS_KEY = "nexus-mail-mock-accounts";
++const MOCK_CONFIG_KEY = "nexus-mail-mock-config";
++const MOCK_SEND_EMAIL_KEY = "nexus-mail-mock-send-email";
++const defaultMockAccounts = [
++  {
++    id: "demo-id",
++    email: "demo@nexus-mail.com",
++    display_name: "Demo User",
++    imap_host: "localhost",
++    imap_port: 993,
++    imap_use_tls: true,
++    smtp_host: "localhost",
++    smtp_port: 465,
++    smtp_use_tls: true,
++  },
++];
++
++const loadMockAccounts = () => {
++  if (typeof window === "undefined") {
++    return [...defaultMockAccounts];
++  }
++  try {
++    const stored = window.localStorage.getItem(MOCK_ACCOUNTS_KEY);
++    if (!stored) return [...defaultMockAccounts];
++    const parsed = JSON.parse(stored);
++    return Array.isArray(parsed) ? parsed : [...defaultMockAccounts];
++  } catch (error) {
++    console.warn("Failed to load mock accounts, using defaults.", error);
++    return [...defaultMockAccounts];
++  }
++};
++
++const persistMockAccounts = (accounts: typeof defaultMockAccounts) => {
++  if (typeof window === "undefined") return;
++  window.localStorage.setItem(MOCK_ACCOUNTS_KEY, JSON.stringify(accounts));
++};
++
++let mockAccounts = loadMockAccounts();
++const mockSyncCounts: Record<string, number> = {};
++
++type MockConfig = {
++  syncShouldFail?: boolean;
++  syncFailMessage?: string;
++  syncUnreadDelta?: Record<string, number>;
++  syncEmailSubjectPrefix?: string;
++  emptyFolders?: string[];
++  folderSubjectMode?: "folder-key";
++  sendShouldFail?: boolean;
++  sendFailMessage?: string;
++};
++
++const readMockConfig = (): MockConfig => {
++  if (typeof window === "undefined") {
++    return {};
++  }
++  try {
++    const stored = window.localStorage.getItem(MOCK_CONFIG_KEY);
++    if (!stored) return {};
++    const parsed = JSON.parse(stored);
++    return parsed && typeof parsed === "object" ? parsed : {};
++  } catch (error) {
++    console.warn("Failed to load mock config, using defaults.", error);
++    return {};
++  }
++};
++
++const resetMockAccounts = () => {
++  mockAccounts = [...defaultMockAccounts];
++  persistMockAccounts(mockAccounts);
++};
++
++const upsertMockAccount = (args: any) => {
++  const existingIndex = mockAccounts.findIndex((account) => account.email === args.email);
++  const nextAccount = {
++    id: existingIndex >= 0 ? mockAccounts[existingIndex].id : `mock-${Date.now()}`,
++    email: args.email,
++    display_name: args.displayName ?? null,
++    imap_host: args.imapHost,
++    imap_port: args.imapPort,
++    imap_use_tls: args.imapUseTls,
++    smtp_host: args.smtpHost,
++    smtp_port: args.smtpPort,
++    smtp_use_tls: args.smtpUseTls,
++  };
++  if (existingIndex >= 0) {
++    mockAccounts[existingIndex] = nextAccount;
++  } else {
++    mockAccounts.push(nextAccount);
++  }
++  persistMockAccounts(mockAccounts);
++};
++
++const resolveFolderCounts = (accountEmail: string) => {
++  const config = readMockConfig();
++  if (accountEmail === "demo@nexus-mail.com") {
++    const counts = { inbox: 95, sent: 0, drafts: 2, archive: 0, spam: 5, trash: 0 };
++    const updated = applySyncUnreadDelta(accountEmail, counts, config);
++    return applyEmptyFolderOverrides(updated, config);
++  }
++  const counts = { inbox: 12, sent: 1, drafts: 0, archive: 0, spam: 0, trash: 0 };
++  const updated = applySyncUnreadDelta(accountEmail, counts, config);
++  return applyEmptyFolderOverrides(updated, config);
++};
++
++const buildMockFolders = (accountEmail: string) => {
++  const counts = resolveFolderCounts(accountEmail);
++  return [
++    { id: `${accountEmail}::inbox`, name: "Inbox", remote_id: "inbox", unread_count: counts.inbox, system_role: "INBOX" },
++    { id: `${accountEmail}::sent`, name: "Sent", remote_id: "sent", unread_count: counts.sent, system_role: "SENT" },
++    { id: `${accountEmail}::drafts`, name: "Drafts", remote_id: "drafts", unread_count: counts.drafts, system_role: "DRAFTS" },
++    { id: `${accountEmail}::archive`, name: "Archive", remote_id: "archive", unread_count: counts.archive, system_role: "ARCHIVE" },
++    { id: `${accountEmail}::spam`, name: "Spam", remote_id: "spam", unread_count: counts.spam, system_role: "SPAM" },
++    { id: `${accountEmail}::trash`, name: "Trash", remote_id: "trash", unread_count: counts.trash, system_role: "TRASH" }
++  ];
++};
++
++const parseFolderId = (folderId?: string) => {
++  if (!folderId) {
++    return { accountEmail: mockAccounts[0]?.email ?? "demo@nexus-mail.com", folderKey: "inbox" };
++  }
++  const [accountEmail, folderKey] = folderId.split("::");
++  if (!folderKey) {
++    return { accountEmail: mockAccounts[0]?.email ?? accountEmail, folderKey: folderId };
++  }
++  return { accountEmail, folderKey };
++};
++
++const applySyncUnreadDelta = (
++  accountEmail: string,
++  counts: Record<string, number>,
++  config: MockConfig
++) => {
++  if (!config.syncUnreadDelta) return counts;
++  if ((mockSyncCounts[accountEmail] ?? 0) === 0) return counts;
++  const updated = { ...counts };
++  Object.entries(config.syncUnreadDelta).forEach(([key, delta]) => {
++    if (typeof delta !== "number") return;
++    const normalized = key.toLowerCase();
++    if (normalized in updated) {
++      updated[normalized] = Math.max(0, updated[normalized] + delta);
++    }
++  });
++  return updated;
++};
++
++const applyEmptyFolderOverrides = (counts: Record<string, number>, config: MockConfig) => {
++  if (!config.emptyFolders?.length) return counts;
++  const updated = { ...counts };
++  config.emptyFolders.forEach((folderKey) => {
++    const normalized = folderKey.toLowerCase();
++    if (normalized in updated) {
++      updated[normalized] = 0;
++    }
++  });
++  return updated;
++};
++
++const resolveMockSubject = (
++  accountEmail: string,
++  folderKey: string,
++  id: number,
++  config: MockConfig
++) => {
++  if (accountEmail !== "demo@nexus-mail.com") {
++    return `${accountEmail} ${folderKey.toUpperCase()} Message #${id}`;
++  }
++  if ((mockSyncCounts[accountEmail] ?? 0) > 0 && config.syncEmailSubjectPrefix) {
++    return `${config.syncEmailSubjectPrefix} #${id}`;
++  }
++  if (config.folderSubjectMode === "folder-key") {
++    return `${folderKey.toUpperCase()} Sample #${id}`;
++  }
++  return `Nexus Mail Sample #${id}`;
++};
++
+ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
+   if (!isTauri) {
+     console.log(`[Mock Invoke] ${cmd}`, args);
++    const config = readMockConfig();
+     
+     // 模拟不同命令的返回
+     switch (cmd) {
+       case "send_email":
+         await new Promise(r => setTimeout(r, 500));
++        if (typeof window !== "undefined") {
++          try {
++            window.localStorage.setItem(
++              MOCK_SEND_EMAIL_KEY,
++              JSON.stringify({ ...args, timestamp: new Date().toISOString() })
++            );
++          } catch (error) {
++            console.warn("Failed to persist mock send payload", error);
++          }
++        }
++        if (config.sendShouldFail) {
++          throw new Error(config.sendFailMessage ?? "Mock send failed");
++        }
+         return "Mock email sent" as any;
+       case "sync_account":
+         await new Promise(r => setTimeout(r, 1000));
++        if (config.syncShouldFail) {
++          throw new Error(config.syncFailMessage ?? "Mock sync failed");
++        }
++        if (args?.email) {
++          mockSyncCounts[args.email] = (mockSyncCounts[args.email] ?? 0) + 1;
++        }
+         return "Mock sync success" as any;
+       case "search_emails":
+         const q = args.query.toLowerCase();
+@@ -20,36 +215,28 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
+           { uid: "search-1", subject: `Found: ${args.query}`, from: "search@mock.com", date: "Now", snippet: "Matching search result" }
+         ].filter(e => e.subject.toLowerCase().includes(q) || e.snippet.toLowerCase().includes(q)) as any;
+       case "list_accounts":
+-        return ["demo@nexus-mail.com"] as any;
++        return mockAccounts.map((account) => account.email) as any;
+       case "get_accounts_detailed":
+-        return [{
+-          id: "demo-id",
+-          email: "demo@nexus-mail.com",
+-          display_name: "Demo User",
+-          imap_host: "localhost",
+-          imap_port: 993,
+-          imap_use_tls: true,
+-          smtp_host: "localhost",
+-          smtp_port: 465,
+-          smtp_use_tls: true
+-        }] as any;
++        return mockAccounts.map((account) => ({ ...account })) as any;
+       case "get_folders":
+-        return [
+-          { id: "mock-inbox", name: "Inbox", remote_id: "inbox", unread_count: 95, system_role: "INBOX" },
+-          { id: "mock-sent", name: "Sent", remote_id: "sent", unread_count: 0, system_role: "SENT" },
+-          { id: "mock-drafts", name: "Drafts", remote_id: "drafts", unread_count: 2, system_role: "DRAFTS" },
+-          { id: "mock-spam", name: "Spam", remote_id: "spam", unread_count: 5, system_role: "SPAM" },
+-          { id: "mock-trash", name: "Trash", remote_id: "trash", unread_count: 0, system_role: "TRASH" }
+-        ] as any;
++        return buildMockFolders(args?.accountEmail ?? mockAccounts[0]?.email ?? "demo@nexus-mail.com") as any;
+       case "get_emails":
++        const { accountEmail, folderKey } = parseFolderId(args?.folderId);
++        if (config.emptyFolders?.map(f => f.toLowerCase()).includes(folderKey.toLowerCase())) {
++          return [] as any;
++        }
++        const isDemo = accountEmail === "demo@nexus-mail.com";
+         return Array.from({ length: 100 }, (_, i) => {
+           const id = 100 - i;
++          const subject = isDemo
++            ? resolveMockSubject(accountEmail, folderKey, id, config)
++            : `${accountEmail} ${folderKey.toUpperCase()} Message #${id}`;
+           return { 
+             uid: String(id), 
+-            subject: `Nexus Mail Sample #${id}`, 
+-            from: `sender-${id}@mock.com`, 
++            subject, 
++            from: isDemo ? `sender-${id}@mock.com` : `${folderKey}-${id}@${accountEmail.split("@")[1] || "mock.com"}`, 
+             date: "Wed, 25 Mar 2026 10:19:36 +0800", 
+-            snippet: `Mock content for message ${id}`,
++            snippet: isDemo ? `Mock content for message ${id}` : `Mock content for ${accountEmail} ${folderKey} ${id}`,
+             flags: id > 5 ? ["\\Seen"] : [] // Mock some unread
+           };
+         }) as any;
+@@ -58,12 +245,28 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
+           uid: args.uid,
+           body_html: "<div><h1>Mock Email Content</h1><p>This is a mock email.</p></div>",
+           body_text: "Mock Email Content",
+-          attachments: []
++          attachments: [
++            {
++              id: "mock-att-1",
++              filename: "welcome.pdf",
++              size: 2480,
++              mime_type: "application/pdf"
++            },
++            {
++              id: "mock-att-2",
++              filename: "preview.png",
++              size: 1024,
++              mime_type: "image/png"
++            }
++          ]
+         } as any;
+       case "get_attachment":
+         return new Uint8Array([72, 101, 108, 108, 111]) as any;
+       case "update_email_flag":
+       case "update_account_details":
++        if (cmd === "update_account_details") {
++          upsertMockAccount(args);
++        }
+       case "update_account_password":
+       case "update_setting":
+         return {} as any;
+@@ -76,10 +279,19 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
+         } as any;
+       case "get_setting":
+         return "mock-value" as any;
++      case "reset_database":
++        resetMockAccounts();
++        return {} as any;
+       case "test_account_connection":
+         await new Promise(r => setTimeout(r, 1500));
+         if (args.password === "error") {
+-          throw "Mock Connection Failed: Invalid password";
++          throw "IMAP Login Failed: Invalid password";
++        }
++        if (args.imapHost?.includes("imap-fail")) {
++          throw "IMAP Connection Failed: Mock IMAP connection failed";
++        }
++        if (args.smtpHost?.includes("smtp-fail") || args.smtpPort === 0) {
++          throw "SMTP Connection Failed: Mock SMTP connection failed";
+         }
+         return {} as any;
+       default:

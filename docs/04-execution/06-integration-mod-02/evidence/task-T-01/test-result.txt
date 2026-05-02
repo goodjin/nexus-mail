@@ -1,0 +1,10 @@
+
+Running 1 test using 1 worker
+
+[1A[2K[1/1] [chromium] › e2e/folder_sync_badges.spec.ts:9:5 › Folder Sync and Unread Badges › should show all standard folders in the sidebar
+[1A[2K  1 passed (1.7s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

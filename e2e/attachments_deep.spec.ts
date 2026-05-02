@@ -4,7 +4,7 @@ test.describe('Attachment Deep Integration', () => {
     test.beforeEach(async ({ page }) => {
         await page.goto('http://localhost:1420');
         try {
-            await page.waitForSelector('text=Nexus Mail Sample #100', { timeout: 5000 });
+            await page.waitForSelector('[data-testid="email-card-100"]', { timeout: 5000 });
         } catch (e) {
             console.log("DEBUG: Page content on timeout:", await page.content());
             await page.screenshot({ path: 'tmp/e2e_timeout.png' });
@@ -14,7 +14,8 @@ test.describe('Attachment Deep Integration', () => {
 
     test('should show attachments and trigger download dialog', async ({ page }) => {
         // 1. 点击一个有附件的邮件 (Mock 数据中所有邮件现在都有附件)
-        await page.click('text=Nexus Mail Sample #100');
+        await page.getByTestId('email-card-100').click();
+        await expect(page.getByTestId('action-delete')).toBeVisible();
         
         // 2. 验证附件列表显示
         const attachment = page.locator('[data-testid="attachment-item-mock-att-1"]');

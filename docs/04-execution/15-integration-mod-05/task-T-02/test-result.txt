@@ -1,0 +1,12 @@
+
+Running 3 tests using 3 workers
+
+[1A[2K[1/3] [chromium] › e2e/search.spec.ts:9:3 › Search Functionality › should return matching results for search query
+[1A[2K[2/3] [chromium] › e2e/search.spec.ts:19:3 › Search Functionality › should show empty state when no results found
+[1A[2K[3/3] [chromium] › e2e/search.spec.ts:29:3 › Search Functionality › should apply filters and update search history
+[1A[2K  3 passed (2.1s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

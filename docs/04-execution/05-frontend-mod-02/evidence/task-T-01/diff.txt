@@ -1,0 +1,183 @@
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-01/before/Sidebar.tsx	2026-04-27 11:32:16
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-01/after/Sidebar.tsx	2026-04-27 11:32:58
+@@ -129,28 +129,14 @@
+         </div>
+ 
+         <nav className="flex-1 overflow-y-auto px-2 space-y-1">
+-          {[...folders].sort((a, b) => {
+-            const getWeight = (f: Folder) => {
+-              const role = f.system_role?.toUpperCase();
+-              if (role === "INBOX") return 1;
+-              if (role === "DRAFTS") return 2;
+-              if (role === "SENT") return 3;
+-              if (role === "ARCHIVE") return 4;
+-              if (role === "SPAM") return 5;
+-              if (role === "TRASH") return 6;
+-              return 10;
+-            };
+-            const wA = getWeight(a);
+-            const wB = getWeight(b);
+-            if (wA !== wB) return wA - wB;
+-            return a.name.localeCompare(b.name);
+-          }).map((folder) => {
++          {folders.map((folder) => {
+             const Icon = getFolderIcon(folder);
+             const displayName = getLocalizedName(folder);
++            const folderKey = getFolderKey(folder);
+             return (
+               <button
+                 key={folder.id}
+-                data-testid={`folder-${folder.name.toLowerCase()}`}
++                data-testid={`folder-${folderKey}`}
+                 onClick={() => onFolderSelect(folder.id)}
+                 className={cn(
+                   "w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
+@@ -163,7 +149,7 @@
+                 <span className="flex-1 text-left truncate">{displayName}</span>
+                 {folder.unread_count > 0 && (
+                   <Badge 
+-                    data-testid={`badge-${folder.name.toLowerCase()}`}
++                    data-testid={`badge-${folderKey}`}
+                     variant={selectedFolderId === folder.id ? "secondary" : "primary"}
+                     className="px-1.5 min-w-[1.25rem] justify-center"
+                   >
+@@ -179,19 +165,36 @@
+   );
+ };
+ 
++function getFolderRole(folder: Folder) {
++  if (folder.system_role) return folder.system_role.toUpperCase();
++  const name = folder.name.toLowerCase();
++  if (name.includes("inbox") || name.includes("收件箱")) return "INBOX";
++  if (name.includes("sent") || name.includes("已发送")) return "SENT";
++  if (name.includes("draft") || name.includes("草稿")) return "DRAFTS";
++  if (name.includes("archive") || name.includes("归档")) return "ARCHIVE";
++  if (name.includes("spam") || name.includes("junk") || name.includes("垃圾邮件")) return "SPAM";
++  if (name.includes("trash") || name.includes("deleted") || name.includes("垃圾箱") || name.includes("已删除")) return "TRASH";
++  return null;
++}
++
++function getFolderKey(folder: Folder) {
++  const role = getFolderRole(folder);
++  return (role ?? folder.name).toLowerCase();
++}
++
+ function getLocalizedName(folder: Folder) {
+-  const role = folder.system_role?.toUpperCase();
++  const role = getFolderRole(folder);
+   if (role === "INBOX") return "收件箱";
+   if (role === "SENT") return "已发送";
+   if (role === "DRAFTS") return "草稿箱";
+-  if (role === "TRASH") return "已删除";
++  if (role === "TRASH") return "垃圾箱";
+   if (role === "SPAM") return "垃圾邮件";
+   if (role === "ARCHIVE") return "归档";
+-  return folder.name; // Fallback to server name
++  return folder.name;
+ }
+ 
+ function getFolderIcon(folder: Folder) {
+-  const role = folder.system_role?.toUpperCase();
++  const role = getFolderRole(folder);
+   if (role === "INBOX") return Inbox;
+   if (role === "SENT") return Mail;
+   if (role === "DRAFTS") return FileText;
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-01/before/useMailbox.ts	2026-04-27 11:32:16
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-01/after/useMailbox.ts	2026-04-27 11:32:58
+@@ -25,6 +25,33 @@
+   }[];
+   flags?: string[];
+ }
++
++const SYSTEM_ROLE_ORDER = ["INBOX", "SENT", "DRAFTS", "ARCHIVE", "SPAM", "TRASH"];
++
++const resolveFolderRole = (folder: Folder) => {
++  if (folder.system_role) return folder.system_role.toUpperCase();
++  const name = folder.name.toLowerCase();
++  if (name.includes("inbox") || name.includes("收件箱")) return "INBOX";
++  if (name.includes("sent") || name.includes("已发送")) return "SENT";
++  if (name.includes("draft") || name.includes("草稿")) return "DRAFTS";
++  if (name.includes("archive") || name.includes("归档")) return "ARCHIVE";
++  if (name.includes("spam") || name.includes("junk") || name.includes("垃圾邮件")) return "SPAM";
++  if (name.includes("trash") || name.includes("deleted") || name.includes("垃圾箱") || name.includes("已删除")) return "TRASH";
++  return null;
++};
++
++const sortFolders = (items: Folder[]) => {
++  return [...items].sort((a, b) => {
++    const roleA = resolveFolderRole(a);
++    const roleB = resolveFolderRole(b);
++    const idxA = roleA ? SYSTEM_ROLE_ORDER.indexOf(roleA) : -1;
++    const idxB = roleB ? SYSTEM_ROLE_ORDER.indexOf(roleB) : -1;
++    const weightA = idxA === -1 ? SYSTEM_ROLE_ORDER.length : idxA;
++    const weightB = idxB === -1 ? SYSTEM_ROLE_ORDER.length : idxB;
++    if (weightA !== weightB) return weightA - weightB;
++    return a.name.localeCompare(b.name);
++  });
++};
+ 
+ export function useMailbox(accountEmail: string | null) {
+   const [folders, setFolders] = useState<Folder[]>([]);
+@@ -45,9 +72,10 @@
+     const fetchFolders = async () => {
+       try {
+         const flds: Folder[] = await invoke("get_folders", { accountEmail });
+-        setFolders(flds);
+-        if (flds.length > 0 && !selectedFolderId) {
+-          setSelectedFolderId(flds[0].id);
++        const ordered = sortFolders(flds);
++        setFolders(ordered);
++        if (ordered.length > 0 && !selectedFolderId) {
++          setSelectedFolderId(ordered[0].id);
+         }
+       } catch (e) {
+         console.error("Failed to fetch folders", e);
+@@ -152,7 +180,7 @@
+       await invoke("sync_account", { email: accountEmail });
+       // Refresh folders and current email list
+       const flds: Folder[] = await invoke("get_folders", { accountEmail });
+-      setFolders(flds);
++      setFolders(sortFolders(flds));
+       
+       if (selectedFolderId) {
+         const msgs: Email[] = await invoke("get_emails", { 
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-01/before/tauri.ts	2026-04-27 11:35:56
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-01/after/tauri.ts	2026-04-27 11:36:13
+@@ -67,9 +67,9 @@
+ 
+ const resolveFolderCounts = (accountEmail: string) => {
+   if (accountEmail === "demo@nexus-mail.com") {
+-    return { inbox: 95, sent: 0, drafts: 2, spam: 5, trash: 0 };
++    return { inbox: 95, sent: 0, drafts: 2, archive: 0, spam: 5, trash: 0 };
+   }
+-  return { inbox: 12, sent: 1, drafts: 0, spam: 0, trash: 0 };
++  return { inbox: 12, sent: 1, drafts: 0, archive: 0, spam: 0, trash: 0 };
+ };
+ 
+ const buildMockFolders = (accountEmail: string) => {
+@@ -78,6 +78,7 @@
+     { id: `${accountEmail}::inbox`, name: "Inbox", remote_id: "inbox", unread_count: counts.inbox, system_role: "INBOX" },
+     { id: `${accountEmail}::sent`, name: "Sent", remote_id: "sent", unread_count: counts.sent, system_role: "SENT" },
+     { id: `${accountEmail}::drafts`, name: "Drafts", remote_id: "drafts", unread_count: counts.drafts, system_role: "DRAFTS" },
++    { id: `${accountEmail}::archive`, name: "Archive", remote_id: "archive", unread_count: counts.archive, system_role: "ARCHIVE" },
+     { id: `${accountEmail}::spam`, name: "Spam", remote_id: "spam", unread_count: counts.spam, system_role: "SPAM" },
+     { id: `${accountEmail}::trash`, name: "Trash", remote_id: "trash", unread_count: counts.trash, system_role: "TRASH" }
+   ];
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-01/before/folder_sync_badges.spec.ts	2026-04-27 11:35:56
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-01/after/folder_sync_badges.spec.ts	2026-04-27 11:36:13
+@@ -7,13 +7,8 @@
+     });
+ 
+     test('should show all standard folders in the sidebar', async ({ page }) => {
+-        const sidebar = page.locator('aside');
+-        await expect(sidebar).toContainText('Inbox');
+-        await expect(sidebar).toContainText('Sent');
+-        await expect(sidebar).toContainText('Drafts');
+-        await expect(sidebar).toContainText('Spam');
+-        await expect(sidebar).toContainText('Trash');
+-        await expect(sidebar).toContainText('Archive');
++        const labels = await page.locator('[data-testid^="folder-"] span.flex-1').allTextContents();
++        expect(labels).toEqual(["收件箱", "已发送", "草稿箱", "归档", "垃圾邮件", "垃圾箱"]);
+     });
+ 
+     test('should show correct unread counts based on seed data', async ({ page }) => {

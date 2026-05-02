@@ -12,16 +12,31 @@ export interface AccountInfo {
   smtp_host: string;
   smtp_port: number;
   smtp_use_tls: boolean;
+  sync_enabled: boolean;
+  sync_interval: number;
+  last_sync: number | null;
+  status: string;
+  last_error: string | null;
+}
+
+export interface AccountDiscoveryResult {
+  imap_host?: string;
+  imap_port?: number;
+  imap_use_tls?: boolean;
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_use_tls?: boolean;
 }
 
 interface AccountContextType {
   accounts: AccountInfo[];
   selectedAccount: string | null;
-  setSelectedAccount: (email: string | null) => void;
+  setSelectedAccount: (accountId: string | null) => void;
   loading: boolean;
   refreshAccounts: () => Promise<void>;
   updateAccount: (details: AccountInfo) => Promise<void>;
   updatePassword: (email: string, pass: string) => Promise<void>;
+  discoverAccountSettings: (email: string) => Promise<AccountDiscoveryResult | null>;
 }
 
 const AccountContext = createContext<AccountContextType | undefined>(undefined);
@@ -36,8 +51,13 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
       setLoading(true);
       const data = await invoke('get_accounts_detailed') as AccountInfo[];
       setAccounts(data);
-      if (data.length > 0 && !selectedAccount) {
-        setSelectedAccount(data[0].email);
+      if (data.length === 0) {
+        setSelectedAccount(null);
+        return;
+      }
+      const stillExists = data.some((account) => account.id === selectedAccount);
+      if (!selectedAccount || !stillExists) {
+        setSelectedAccount(data[0].id);
       }
     } catch (error) {
       console.error('Failed to fetch accounts:', error);
@@ -60,12 +80,23 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
       smtpHost: details.smtp_host,
       smtpPort: details.smtp_port,
       smtpUseTls: details.smtp_use_tls,
+      syncEnabled: details.sync_enabled,
+      syncInterval: details.sync_interval,
     });
     await fetchAccounts();
   };
 
   const updatePassword = async (email: string, password: string) => {
     await invoke('update_account_password', { email, password });
+  };
+
+  const discoverAccountSettings = async (email: string) => {
+    try {
+      return await invoke('discover_account_settings', { email }) as AccountDiscoveryResult;
+    } catch (error) {
+      console.error('Failed to discover account settings:', error);
+      throw error;
+    }
   };
 
   return (
@@ -76,7 +107,8 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
       loading, 
       refreshAccounts: fetchAccounts,
       updateAccount,
-      updatePassword
+      updatePassword,
+      discoverAccountSettings
     }}>
       {children}
     </AccountContext.Provider>

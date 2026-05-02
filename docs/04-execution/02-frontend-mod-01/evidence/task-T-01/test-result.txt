@@ -1,0 +1,1 @@
+No component/unit tests available for SettingsModal form fields. Baseline Playwright compose.spec.ts fails pre-change due to missing account selector (pre-existing). No task-specific tests run.

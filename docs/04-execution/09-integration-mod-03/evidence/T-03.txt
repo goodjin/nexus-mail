@@ -1,0 +1,5 @@
+Task: T-03 XSS 场景
+Changes: None (existing coverage validated)
+Tests:
+- npx playwright test e2e/security.spec.ts --reporter=line
+Result: ✅ Passed

@@ -1,0 +1,15 @@
+
+> --package-name@0.1.0 test:e2e
+> playwright test compose.spec.ts
+
+
+Running 2 tests using 2 workers
+
+[1A[2K[1/2] [chromium] › e2e/compose.spec.ts:42:3 › Compose and Send Email › should prefill reply and forward content
+[1A[2K[2/2] [chromium] › e2e/compose.spec.ts:12:3 › Compose and Send Email › should open compose modal and send email
+[1A[2K  2 passed (2.9s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

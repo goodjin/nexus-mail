@@ -1,0 +1,31 @@
+--- docs/04-execution/06-integration-mod-02/evidence/task-T-04/before/sync_folder_integration.spec.ts	2026-04-27 12:10:11
++++ docs/04-execution/06-integration-mod-02/evidence/task-T-04/after/sync_folder_integration.spec.ts	2026-04-27 12:10:34
+@@ -42,4 +42,28 @@
+     await expect(page.locator('h2')).toContainText('Sent');
+     await expect(page.getByTestId('email-card-100')).toContainText('SENT');
+   });
++
++  test('should show sync failure feedback', async ({ page }) => {
++    await applyMockConfig(page, {
++      syncShouldFail: true,
++      syncFailMessage: 'Simulated sync error'
++    });
++
++    await page.goto('/');
++    await page.waitForSelector('aside');
++
++    await page.getByRole('button', { name: 'Refresh' }).click();
++    await expect(page.getByText('Sync failed: Simulated sync error')).toBeVisible();
++  });
++
++  test('should show empty state for empty folder', async ({ page }) => {
++    await applyMockConfig(page, { emptyFolders: ['archive'] });
++
++    await page.goto('/');
++    await page.waitForSelector('aside');
++
++    await page.getByTestId('folder-archive').click();
++    await expect(page.getByText('No emails in this folder')).toBeVisible();
++    await expect(page.locator('[data-testid^="email-card-"]')).toHaveCount(0);
++  });
+ });

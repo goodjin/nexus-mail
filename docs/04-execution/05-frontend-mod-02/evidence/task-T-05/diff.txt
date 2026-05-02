@@ -1,0 +1,39 @@
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-05/before/multi_account_persistence.spec.ts	2026-04-27 11:43:33
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-05/after/multi_account_persistence.spec.ts	2026-04-27 11:45:12
+@@ -80,12 +80,15 @@
+ 
+     const inboxBadge = page.getByTestId('badge-inbox');
+     await expect(inboxBadge).toHaveText('95');
++    await page.getByTestId('folder-sent').click();
++    await expect(page.locator('h2')).toContainText('Sent');
+ 
+     const newAccountButton = page.locator(`button[title="${newEmail}"]`);
+     await expect(newAccountButton).toBeVisible();
+     await newAccountButton.click();
+     await expect(newAccountButton).toHaveClass(/ring-nexus-accent/);
+     await expect(inboxBadge).toHaveText('12');
++    await expect(page.locator('h2')).toContainText('Inbox');
+ 
+     const demoAccountButton = page.locator('button[title="demo@nexus-mail.com"]');
+     await demoAccountButton.click();
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-05/before/sync_feedback.spec.ts	2026-04-27 11:43:45
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-05/after/sync_feedback.spec.ts	2026-04-27 11:58:34
+@@ -0,0 +1,18 @@
++import { test, expect } from '@playwright/test';
++
++test.describe('Sync feedback', () => {
++  test.beforeEach(async ({ page }) => {
++    await page.goto('/');
++    await page.waitForSelector('aside');
++  });
++
++  test('should show sync loading and completion toast', async ({ page }) => {
++    const refreshButton = page.getByRole('button', { name: 'Refresh' });
++    await expect(refreshButton).toBeVisible();
++    await refreshButton.click();
++
++    await expect(page.getByText('Syncing account...')).toBeVisible();
++    await expect(page.getByRole('button', { name: /Syncing/ })).toBeVisible();
++    await expect(page.getByText('Sync completed!')).toBeVisible();
++  });
++});

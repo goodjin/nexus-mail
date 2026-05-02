@@ -1,0 +1,3 @@
+npm run build --silent: passed
+cargo test --manifest-path src-tauri/Cargo.toml test_search_history_limit_and_clear: passed
+cargo test --manifest-path src-tauri/Cargo.toml search_emails_filtered: passed

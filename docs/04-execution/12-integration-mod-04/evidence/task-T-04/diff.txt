@@ -1,0 +1,116 @@
+--- docs/04-execution/12-integration-mod-04/evidence/task-T-04/before/ComposeModal.tsx	2026-04-27 14:35:44
++++ docs/04-execution/12-integration-mod-04/evidence/task-T-04/after/ComposeModal.tsx	2026-04-27 14:36:23
+@@ -1,7 +1,7 @@
+ import React, { useState } from 'react';
+ import { X, Send, Paperclip } from 'lucide-react';
+ import { Button } from "../ui/Button";
+-import { invoke } from "../../lib/tauri";
++import { invoke, isTauri } from "../../lib/tauri";
+ import { RichTextEditor } from "./RichTextEditor";
+ 
+ interface ComposeModalProps {
+@@ -28,6 +28,7 @@
+   const [attachments, setAttachments] = useState<Array<{ name: string, path: string, size: number }>>([]);
+   const [isDragActive, setIsDragActive] = useState(false);
+   const [draftStatus, setDraftStatus] = useState<string | null>(null);
++  const fileInputRef = React.useRef<HTMLInputElement>(null);
+   const maxAttachmentBytes = 25 * 1024 * 1024;
+   const draftKey = `nexus-compose-draft:${fromAccount}`;
+   const resolveDraftIntervalMs = () => {
+@@ -135,6 +136,27 @@
+     } catch (e) {
+       console.error("Failed to add attachment", e);
+     }
++  };
++
++  const handleAttachmentClick = () => {
++    if (!isTauri) {
++      fileInputRef.current?.click();
++      return;
++    }
++    handleAddAttachment();
++  };
++
++  const handleFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
++    const files = Array.from(event.target.files ?? []);
++    if (files.length === 0) return;
++    applyAttachmentLimits(
++      files.map((file) => ({
++        name: file.name,
++        path: file.name,
++        size: file.size
++      }))
++    );
++    event.target.value = "";
+   };
+ 
+   const handleDrop = async (event: React.DragEvent<HTMLDivElement>) => {
+@@ -326,10 +348,18 @@
+             <Button 
+                 variant="ghost" 
+                 size="icon"
+-                onClick={handleAddAttachment}
++                onClick={handleAttachmentClick}
+             >
+               <Paperclip className="w-5 h-5 text-nexus-muted" />
+             </Button>
++            <input
++              ref={fileInputRef}
++              type="file"
++              multiple
++              className="hidden"
++              data-testid="compose-attachment-input"
++              onChange={handleFileInputChange}
++            />
+           </div>
+           <div className="flex space-x-3">
+             <Button variant="ghost" onClick={onClose} disabled={sending}>Cancel</Button>
+--- /dev/null	2026-04-27 14:38:47
++++ docs/04-execution/12-integration-mod-04/evidence/task-T-04/after/compose_attachments.spec.ts	2026-04-27 14:38:47
+@@ -0,0 +1,46 @@
++import { test, expect } from '@playwright/test';
++
++const mockSendPayloadKey = 'nexus-mail-mock-send-email';
++const mockConfigKey = 'nexus-mail-mock-config';
++
++test.describe('Compose attachments', () => {
++  test.beforeEach(async ({ page }) => {
++    await page.goto('/');
++    await page.evaluate((key) => localStorage.removeItem(key), mockSendPayloadKey);
++    await page.evaluate((key) => localStorage.setItem(key, JSON.stringify({})), mockConfigKey);
++    await expect(page.locator('button[title="demo@nexus-mail.com"]')).toBeVisible();
++  });
++
++  test('should include attachments when sending', async ({ page }) => {
++    await page.getByTestId('compose-button').click();
++    await expect(page.getByText('New Message')).toBeVisible();
++
++    await page.setInputFiles('[data-testid="compose-attachment-input"]', {
++      name: 'attachment.txt',
++      mimeType: 'text/plain',
++      buffer: Buffer.from('attachment content')
++    });
++
++    await expect(page.getByText('attachment.txt')).toBeVisible();
++
++    await page.fill('#to', 'attachment-recipient@nexus-mail.com');
++    await page.fill('#subject', 'Attachment send');
++    await page.locator('[contenteditable="true"]').fill('Attachment body.');
++
++    page.on('dialog', async dialog => {
++      await dialog.accept();
++    });
++
++    const sendButton = page.getByTestId('compose-send-button');
++    await sendButton.evaluate((el: HTMLElement) => el.click());
++    await expect(page.getByText('New Message')).not.toBeVisible();
++
++    const payload = await page.evaluate((key) => {
++      const stored = localStorage.getItem(key);
++      return stored ? JSON.parse(stored) : null;
++    }, mockSendPayloadKey);
++
++    expect(payload).toBeTruthy();
++    expect(payload.attachments).toContain('attachment.txt');
++  });
++});

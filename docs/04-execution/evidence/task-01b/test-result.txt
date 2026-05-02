@@ -1,0 +1,3 @@
+npm run build --silent: PASS
+cargo test --manifest-path src-tauri/Cargo.toml test_db_initialization -- --nocapture: PASS
+cargo test --manifest-path src-tauri/Cargo.toml test_upsert_logic -- --nocapture: PASS

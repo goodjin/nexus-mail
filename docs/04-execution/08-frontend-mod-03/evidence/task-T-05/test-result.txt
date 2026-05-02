@@ -1,0 +1,6 @@
+
+Running 2 tests using 2 workers
+
+[1A[2K[1/2] [chromium] › e2e/navigation.spec.ts:22:3 › Navigation Flow › should handle account switching
+[1A[2K[2/2] [chromium] › e2e/navigation.spec.ts:10:3 › Navigation Flow › should switch folders and update email list
+[1A[2K  2 passed (1.9s)

@@ -1,0 +1,121 @@
+--- docs/04-execution/11-frontend-mod-04/evidence/task-T-03/before/ComposeModal.tsx	2026-04-27 13:40:27
++++ docs/04-execution/11-frontend-mod-04/evidence/task-T-03/after/ComposeModal.tsx	2026-04-27 13:40:31
+@@ -26,6 +26,8 @@
+   const [sending, setSending] = useState(false);
+   const [error, setError] = useState<string | null>(null);
+   const [attachments, setAttachments] = useState<Array<{ name: string, path: string, size: number }>>([]);
++  const [isDragActive, setIsDragActive] = useState(false);
++  const maxAttachmentBytes = 25 * 1024 * 1024;
+ 
+   React.useEffect(() => {
+     if (!isOpen) return;
+@@ -48,6 +50,18 @@
+ 
+   if (!isOpen) return null;
+ 
++  const applyAttachmentLimits = (newAttachments: Array<{ name: string; path: string; size: number }>) => {
++    if (newAttachments.length === 0) return;
++    const oversized = newAttachments.filter(att => att.size > maxAttachmentBytes);
++    if (oversized.length > 0) {
++      setError(`Attachment too large (max 25 MB): ${oversized.map(att => att.name).join(", ")}`);
++    }
++    const valid = newAttachments.filter(att => att.size <= maxAttachmentBytes);
++    if (valid.length > 0) {
++      setAttachments((prev) => [...prev, ...valid]);
++    }
++  };
++
+   const handleAddAttachment = async () => {
+     try {
+       const { open } = await import("@tauri-apps/plugin-dialog");
+@@ -63,18 +77,18 @@
+           const stats = await lstat(path);
+           return {
+             name: path.split('/').pop() || "unnamed",
+-            path,
+-            size: stats.size
++              path,
++              size: stats.size
+           };
+         }));
+-        setAttachments([...attachments, ...newAttachments]);
++        applyAttachmentLimits(newAttachments);
+       } else if (selected) {
+           const path = selected as string;
+           const stats = await lstat(path);
+-          setAttachments([...attachments, {
+-              name: path.split('/').pop() || "unnamed",
+-              path,
+-              size: stats.size
++          applyAttachmentLimits([{
++            name: path.split('/').pop() || "unnamed",
++            path,
++            size: stats.size
+           }]);
+       }
+     } catch (e) {
+@@ -82,6 +96,31 @@
+     }
+   };
+ 
++  const handleDrop = async (event: React.DragEvent<HTMLDivElement>) => {
++    event.preventDefault();
++    setIsDragActive(false);
++    const files = Array.from(event.dataTransfer.files);
++    const paths = files.map((file) => (file as File & { path?: string }).path).filter(Boolean) as string[];
++    if (paths.length === 0) {
++      setError("Drag-and-drop attachments require file system access.");
++      return;
++    }
++    try {
++      const { lstat } = await import("@tauri-apps/plugin-fs");
++      const newAttachments = await Promise.all(paths.map(async (path) => {
++        const stats = await lstat(path);
++        return {
++          name: path.split('/').pop() || "unnamed",
++          path,
++          size: stats.size
++        };
++      }));
++      applyAttachmentLimits(newAttachments);
++    } catch (e) {
++      console.error("Failed to handle dropped attachments", e);
++    }
++  };
++
+   const handleSend = async () => {
+     setError(null);
+     const strippedBody = body.replace(/<[^>]*>/g, '').trim();
+@@ -182,11 +221,27 @@
+             />
+           </div>
+           
+-          <RichTextEditor 
+-            content={body} 
+-            onChange={setBody} 
+-            className="flex-1 min-h-[300px]"
+-          />
++          <div
++            className={`rounded-lg border border-dashed px-3 py-2 transition-colors ${
++              isDragActive ? "border-nexus-accent bg-nexus-sidebar/40" : "border-nexus-border/40"
++            }`}
++            onDragEnter={(event) => {
++              event.preventDefault();
++              setIsDragActive(true);
++            }}
++            onDragOver={(event) => event.preventDefault()}
++            onDragLeave={() => setIsDragActive(false)}
++            onDrop={handleDrop}
++          >
++            <RichTextEditor 
++              content={body} 
++              onChange={setBody} 
++              className="flex-1 min-h-[300px]"
++            />
++            <p className="text-[10px] text-nexus-muted mt-2">
++              Drag files here to attach (max 25 MB each).
++            </p>
++          </div>
+ 
+           {attachments.length > 0 && (
+             <div className="flex flex-wrap gap-2 pt-2 border-t">

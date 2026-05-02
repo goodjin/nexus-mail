@@ -1,0 +1,292 @@
+diff --git a/src-tauri/Cargo.lock b/src-tauri/Cargo.lock
+index ab12c67..a4a9f36 100644
+--- a/src-tauri/Cargo.lock
++++ b/src-tauri/Cargo.lock
+@@ -2813,6 +2813,16 @@ version = "0.3.17"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+ 
++[[package]]
++name = "mime_guess"
++version = "2.0.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
++dependencies = [
++ "mime",
++ "unicase",
++]
++
+ [[package]]
+ name = "minimal-lexical"
+ version = "0.2.1"
+@@ -2959,6 +2969,7 @@ dependencies = [
+  "lettre",
+  "mailparse",
+  "md5",
++ "mime_guess",
+  "mockall",
+  "native-tls",
+  "once_cell",
+@@ -5985,6 +5996,12 @@ dependencies = [
+  "unic-common",
+ ]
+ 
++[[package]]
++name = "unicase"
++version = "2.9.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
++
+ [[package]]
+ name = "unicode-bidi"
+ version = "0.3.18"
+diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
+index 4b771d1..da21a7f 100644
+--- a/src-tauri/Cargo.toml
++++ b/src-tauri/Cargo.toml
+@@ -31,6 +31,7 @@ chrono = { version = "0.4", features = ["serde"] }
+ keyring = "2"
+ mailparse = "0.15"
+ once_cell = "1.19"
++mime_guess = "2"
+ aes-gcm = "0.10.3"
+ pbkdf2 = "0.12.2"
+ rand = "0.10.0"
+diff --git a/src-tauri/src/core/smtp_client.rs b/src-tauri/src/core/smtp_client.rs
+index 40a89e4..219bc34 100644
+--- a/src-tauri/src/core/smtp_client.rs
++++ b/src-tauri/src/core/smtp_client.rs
+@@ -1,7 +1,8 @@
+-use super::traits::MailSender;
+-use anyhow::{Context, Result};
++use super::traits::{MailSender, SendEmailRequest, SendEmailResult};
++use anyhow::{bail, Context, Result};
+ use async_trait::async_trait;
+ use lettre::{transport::smtp::authentication::Credentials, Message, SmtpTransport, Transport, transport::smtp::client::Tls};
++use std::path::PathBuf;
+ 
+ pub struct RealSmtpClient {
+     host: String,
+@@ -17,63 +18,111 @@ impl RealSmtpClient {
+             use_tls,
+         }
+     }
++
++    pub fn test_connectivity(&self) -> Result<()> {
++        let stream = std::net::TcpStream::connect((self.host.as_str(), self.port))?;
++        if self.use_tls {
++            let connector = native_tls::TlsConnector::builder().build()?;
++            let _ = connector.connect(&self.host, stream)?;
++        }
++        Ok(())
++    }
++}
++
++fn resolve_attachment_path(path: &str) -> Result<PathBuf> {
++    let trimmed = path.trim();
++    if trimmed.is_empty() {
++        bail!("Attachment path is empty");
++    }
++
++    let mut raw_path = trimmed;
++    if let Some(stripped) = trimmed.strip_prefix("file://") {
++        raw_path = stripped;
++    }
++
++    let resolved = if let Some(stripped) = raw_path.strip_prefix("~/") {
++        let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Home directory not found"))?;
++        home.join(stripped)
++    } else {
++        PathBuf::from(raw_path)
++    };
++
++    if !resolved.exists() {
++        bail!("Attachment not found: {}", resolved.display());
++    }
++    if !resolved.is_file() {
++        bail!("Attachment is not a file: {}", resolved.display());
++    }
++
++    Ok(resolved)
+ }
+ 
+ #[async_trait]
+ impl MailSender for RealSmtpClient {
+-    async fn send_email(
+-        &self,
+-        from: &str,
+-        to: &str,
+-        subject: &str,
+-        body: &str,
+-        attachments: Vec<String>,
+-    ) -> Result<(Vec<u8>, String)> {
+-        use lettre::message::{Attachment, MultiPart, SinglePart, header::ContentType, header::MessageId};
+-
+-        let password = crate::core::security::SecurityService::get_password(from)
++    async fn send_email(&self, request: &SendEmailRequest) -> Result<SendEmailResult> {
++        use lettre::message::{Attachment, MultiPart, SinglePart, header::ContentType};
++
++        let password = crate::core::security::SecurityService::get_password(&request.from)
+             .context("Failed to get password for SMTP")?;
+ 
+         let raw_msg_id = uuid::Uuid::new_v4().to_string();
+-        let msg_id_domain = from.split('@').nth(1).unwrap_or("nexus-mail.local");
++        let msg_id_domain = request
++            .from
++            .split('@')
++            .nth(1)
++            .unwrap_or("nexus-mail.local");
+         let msg_id_val = format!("<{}@{}>", raw_msg_id, msg_id_domain);
+ 
+-        let builder = Message::builder()
+-            .from(from.parse()?)
+-            .to(to.parse()?)
+-            .subject(subject)
++        let mut builder = Message::builder()
++            .from(request.from.parse()?)
++            .subject(&request.subject)
+             .message_id(Some(msg_id_val.clone()));
+ 
+-        let email = if attachments.is_empty() {
+-            builder.header(ContentType::TEXT_PLAIN).body(body.to_string())?
++        for recipient in &request.to {
++            builder = builder.to(recipient.parse()?);
++        }
++        for recipient in &request.cc {
++            builder = builder.cc(recipient.parse()?);
++        }
++        for recipient in &request.bcc {
++            builder = builder.bcc(recipient.parse()?);
++        }
++
++        let email = if request.attachments.is_empty() {
++            builder
++                .header(ContentType::TEXT_PLAIN)
++                .body(request.body.to_string())?
+         } else {
+             let mut multipart = MultiPart::mixed()
+                 .singlepart(SinglePart::builder()
+                     .header(ContentType::TEXT_PLAIN)
+-                    .body(body.to_string()));
++                    .body(request.body.to_string()));
+ 
+-            for path in attachments {
+-                let path_buf = std::path::Path::new(&path);
+-                let filename = path_buf.file_name()
++            for path in &request.attachments {
++                let path_buf = resolve_attachment_path(path)
++                    .with_context(|| format!("Invalid attachment path: {}", path))?;
++                let filename = path_buf
++                    .file_name()
+                     .and_then(|fs| fs.to_str())
+                     .unwrap_or("attachment")
+                     .to_string();
+-                
+-                let content = std::fs::read(&path)
+-                    .with_context(|| format!("Failed to read attachment at {}", path))?;
+-                
+-                // 简单的 MIME 检测 (也可以使用 mime_guess)
+-                let mime = "application/octet-stream";
+-                
++
++                let content = std::fs::read(&path_buf)
++                    .with_context(|| format!("Failed to read attachment at {}", path_buf.display()))?;
++
++                let mime = mime_guess::from_path(&path_buf).first_or_octet_stream();
++                let content_type = ContentType::parse(mime.essence_str())
++                    .with_context(|| format!("Failed to parse MIME type {}", mime.essence_str()))?;
++
+                 multipart = multipart.singlepart(
+                     Attachment::new(filename)
+-                        .body(content, ContentType::parse(mime)?)
++                        .body(content, content_type)
+                 );
+             }
+             builder.multipart(multipart)?
+         };
+ 
+-        let creds = Credentials::new(from.to_string(), password);
++        let creds = Credentials::new(request.from.to_string(), password);
+ 
+         let mut mailer_builder = SmtpTransport::relay(&self.host)?
+             .port(self.port)
+@@ -89,7 +138,10 @@ impl MailSender for RealSmtpClient {
+             .send(&email)
+             .map_err(|e| anyhow::anyhow!("SMTP Error: {}", e))?;
+ 
+-        Ok((email.formatted(), msg_id_val))
++        Ok(SendEmailResult {
++            raw: email.formatted(),
++            message_id: msg_id_val,
++        })
+     }
+ }
+ 
+@@ -98,6 +150,8 @@ mod tests {
+     use super::*;
+     use crate::core::test_servers::MockServers;
+     use crate::core::security::SecurityService;
++    use std::io::Read;
++    use std::net::TcpListener;
+     use std::thread;
+     use std::time::Duration;
+ 
+@@ -117,13 +171,16 @@ mod tests {
+         SecurityService::set_password(from, "pass").unwrap();
+ 
+         // 4. 发送邮件
+-        let result = client.send_email(
+-            from,
+-            "receiver@test.com",
+-            "Test Subject",
+-            "Test Body",
+-            vec![]
+-        ).await;
++        let request = SendEmailRequest {
++            from: from.to_string(),
++            to: vec!["receiver@test.com".to_string()],
++            cc: vec![],
++            bcc: vec![],
++            subject: "Test Subject".to_string(),
++            body: "Test Body".to_string(),
++            attachments: vec![],
++        };
++        let result = client.send_email(&request).await;
+ 
+         assert!(result.is_ok(), "Sending should succeed when password is set: {:?}", result.err());
+     }
+@@ -134,9 +191,33 @@ mod tests {
+         let from = "unknown@test.com";
+         SecurityService::delete_password(from).ok();
+ 
+-        let result = client.send_email(from, "to@test.com", "sub", "body", vec![]).await;
++        let request = SendEmailRequest {
++            from: from.to_string(),
++            to: vec!["to@test.com".to_string()],
++            cc: vec![],
++            bcc: vec![],
++            subject: "sub".to_string(),
++            body: "body".to_string(),
++            attachments: vec![],
++        };
++        let result = client.send_email(&request).await;
+         assert!(result.is_err());
+         let err_msg = format!("{:?}", result.unwrap_err());
+         assert!(err_msg.contains("Password not found"));
+     }
++
++    #[test]
++    fn test_smtp_connectivity_fails_on_tls_mismatch() {
++        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
++        let port = listener.local_addr().unwrap().port();
++        thread::spawn(move || {
++            if let Ok((mut stream, _)) = listener.accept() {
++                let mut buf = [0u8; 8];
++                let _ = stream.read(&mut buf);
++            }
++        });
++
++        let client = RealSmtpClient::new("127.0.0.1", port, true);
++        assert!(client.test_connectivity().is_err());
++    }
+ }

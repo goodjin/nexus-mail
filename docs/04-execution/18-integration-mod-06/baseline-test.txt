@@ -1,0 +1,9 @@
+Running 2 tests using 2 workers
+
+[1/2] [chromium] › e2e/settings_shortcuts.spec.ts:20:3 › Settings & Shortcuts (MOD-06) › should respond to keyboard shortcuts
+[2/2] [chromium] › e2e/settings_shortcuts.spec.ts:9:3 › Settings & Shortcuts (MOD-06) › should switch theme mode from settings
+  2 passed (2.5s)
+
+To open last HTML report run:
+
+  npx playwright show-report

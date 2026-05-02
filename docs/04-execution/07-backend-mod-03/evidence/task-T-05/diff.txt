@@ -1,0 +1,155 @@
+--- docs/04-execution/07-backend-mod-03/evidence/task-T-05/before/commands.rs	2026-04-27 12:15:04
++++ docs/04-execution/07-backend-mod-03/evidence/task-T-05/after/commands.rs	2026-04-27 12:15:21
+@@ -57,6 +57,13 @@
+ 
+ const DETAILS_CACHE_TTL_SECS: i64 = 600;
+ 
++fn resolve_attachment_part_id(attachment_id: &str) -> &str {
++    attachment_id
++        .rsplit_once("::")
++        .map(|(_, part)| part)
++        .unwrap_or(attachment_id)
++}
++
+ #[tauri::command]
+ pub async fn get_accounts_detailed(db: State<'_, Database>) -> Result<Vec<AccountInfo>, String> {
+     db.get_accounts_detailed().await.map_err(|e| e.to_string())
+@@ -303,6 +310,12 @@
+     fn test_email_domain_validation() {
+         assert_eq!(email_domain("demo@example.com").unwrap(), "example.com");
+         assert!(email_domain("invalid-email").is_err());
++    }
++
++    #[test]
++    fn test_resolve_attachment_part_id() {
++        assert_eq!(resolve_attachment_part_id("email-123::1.2"), "1.2");
++        assert_eq!(resolve_attachment_part_id("1.3"), "1.3");
+     }
+ }
+ 
+@@ -695,10 +708,7 @@
+         .await
+         .map_err(|e| e.to_string())?;
+ 
+-    let part_id = attachment_id
+-        .rsplit_once("::")
+-        .map(|(_, part)| part)
+-        .unwrap_or(&attachment_id);
++    let part_id = resolve_attachment_part_id(&attachment_id);
+ 
+     let data = client
+         .get_attachment(&folder_row.0, &uid, part_id)
+--- docs/04-execution/07-backend-mod-03/evidence/task-T-05/before/database.rs	2026-04-27 12:15:04
++++ docs/04-execution/07-backend-mod-03/evidence/task-T-05/after/database.rs	2026-04-27 12:15:21
+@@ -898,5 +898,111 @@
+         assert_eq!(attachment_count.0, 0);
+         assert_eq!(email_count.0, 0);
+         assert_eq!(fts_count.0, 0);
++    }
++
++    #[tokio::test]
++    async fn test_email_list_has_attachments_flag() {
++        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
++        let db = Database { pool };
++        db.init_tables().await.unwrap();
++
++        let acct_id = db.upsert_account("list@test.com", None, "h", 993, true, "h", 465, true).await.unwrap();
++        let folder_id = db.upsert_folder(&acct_id, "INBOX", "Inbox", 0, Some("INBOX")).await.unwrap();
++
++        let summary = crate::core::traits::EmailSummary {
++            uid: "55".into(),
++            subject: "Attachment mail".into(),
++            from: "sender@test.com".into(),
++            date: "now".into(),
++            snippet: "has attachment".into(),
++            flags: vec![],
++            message_id: None,
++        };
++        let email_id = db.upsert_email(&folder_id, &summary).await.unwrap();
++
++        sqlx::query(
++            "INSERT INTO attachments (id, email_id, filename, mime_type, size, content_id, is_inline)
++             VALUES (?, ?, ?, ?, ?, ?, ?)",
++        )
++        .bind(format!("{}::1.2", email_id))
++        .bind(&email_id)
++        .bind("file.txt")
++        .bind("text/plain")
++        .bind(10_i64)
++        .bind(Option::<String>::None)
++        .bind(false)
++        .execute(&db.pool)
++        .await
++        .unwrap();
++
++        let rows: Vec<(i64,)> = sqlx::query_as(
++            "SELECT EXISTS(SELECT 1 FROM attachments WHERE attachments.email_id = emails.id)
++             FROM emails
++             WHERE folder_id = ?",
++        )
++        .bind(&folder_id)
++        .fetch_all(&db.pool)
++        .await
++        .unwrap();
++
++        assert_eq!(rows.len(), 1);
++        assert_eq!(rows[0].0, 1);
++    }
++
++    #[tokio::test]
++    async fn test_detail_cache_columns_roundtrip() {
++        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
++        let db = Database { pool };
++        db.init_tables().await.unwrap();
++
++        let acct_id = db.upsert_account("cache@test.com", None, "h", 993, true, "h", 465, true).await.unwrap();
++        let folder_id = db.upsert_folder(&acct_id, "INBOX", "Inbox", 0, Some("INBOX")).await.unwrap();
++
++        let summary = crate::core::traits::EmailSummary {
++            uid: "77".into(),
++            subject: "Cached detail".into(),
++            from: "cache@test.com".into(),
++            date: "now".into(),
++            snippet: "cache".into(),
++            flags: vec![],
++            message_id: None,
++        };
++        let email_id = db.upsert_email(&folder_id, &summary).await.unwrap();
++
++        let headers = vec![crate::core::traits::EmailHeader {
++            name: "From".to_string(),
++            value: "cache@test.com".to_string(),
++        }];
++        let headers_json = serde_json::to_string(&headers).unwrap();
++        let cached_at = chrono::Utc::now().timestamp();
++
++        sqlx::query(
++            "UPDATE emails SET body_html = ?, body_text = ?, headers = ?, detail_cached_at = ? WHERE id = ?",
++        )
++        .bind("<p>cached</p>")
++        .bind("cached text")
++        .bind(&headers_json)
++        .bind(cached_at)
++        .bind(&email_id)
++        .execute(&db.pool)
++        .await
++        .unwrap();
++
++        let row: (Option<String>, Option<String>, Option<String>, Option<i64>) = sqlx::query_as(
++            "SELECT body_html, body_text, headers, detail_cached_at FROM emails WHERE id = ?",
++        )
++        .bind(&email_id)
++        .fetch_one(&db.pool)
++        .await
++        .unwrap();
++
++        assert_eq!(row.0.as_deref(), Some("<p>cached</p>"));
++        assert_eq!(row.1.as_deref(), Some("cached text"));
++        assert!(row.3.is_some());
++
++        let parsed: Vec<crate::core::traits::EmailHeader> =
++            serde_json::from_str(row.2.as_ref().unwrap()).unwrap();
++        assert_eq!(parsed[0].name, "From");
++        assert_eq!(parsed[0].value, "cache@test.com");
+     }
+ }

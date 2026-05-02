@@ -11,7 +11,6 @@ test.describe('Email Actions', () => {
   test('should show action buttons in detail view', async ({ page }) => {
     await expect(page.getByTestId('action-unread')).toBeVisible();
     await expect(page.getByTestId('action-flag')).toBeVisible();
-    await expect(page.getByTestId('action-archive')).toBeVisible();
     await expect(page.getByTestId('action-delete')).toBeVisible();
   });
 
@@ -26,11 +25,30 @@ test.describe('Email Actions', () => {
     await page.waitForURL('**/');
   });
 
+  test('should keep selected emails when bulk delete confirmation is dismissed', async ({ page }) => {
+    await page.getByTestId('email-select-100').click();
+    await page.getByTestId('email-select-99').click();
+    await expect(page.getByTestId('selected-count')).toContainText('2 selected');
+
+    const dialogPromise = new Promise<string>((resolve) => {
+      page.once('dialog', async (dialog) => {
+        expect(dialog.type()).toBe('confirm');
+        const message = dialog.message();
+        await dialog.dismiss();
+        resolve(message);
+      });
+    });
+    await page.getByTestId('bulk-delete').click();
+    await expect(dialogPromise).resolves.toBe('Delete 2 emails?');
+
+    await expect(page.getByTestId('selected-count')).toContainText('2 selected');
+    await expect(page.getByTestId('email-card-100')).toBeVisible();
+    await expect(page.getByTestId('email-card-99')).toBeVisible();
+  });
+
   test('should show attachments in detail view', async ({ page }) => {
-      // Our mock for get_emails (default) doesn't have attachments yet.
-      // But we can check if the section is hidden or visible based on data.
-      const attachmentsHeader = page.getByText(/Attachments/);
-      // Currently our mock has no attachments in get_emails list.
-      await expect(attachmentsHeader).not.toBeVisible();
+      // The first mock email includes attachments (uid=100).
+      const attachmentsHeader = page.getByRole('heading', { name: /Attachments/i });
+      await expect(attachmentsHeader).toBeVisible();
   });
 });

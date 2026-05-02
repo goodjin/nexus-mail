@@ -1,0 +1,130 @@
+diff --git a/src-tauri/src/commands.rs b/src-tauri/src/commands.rs
+index 554f4fb..fe59d9b 100644
+--- a/src-tauri/src/commands.rs
++++ b/src-tauri/src/commands.rs
+@@ -7,6 +7,21 @@ use crate::core::security::SecurityService;
+ use anyhow::Result;
+ use tauri::State;
+ 
++fn validate_account_update(email: &str, imap_host: &str, smtp_host: &str) -> Result<(), String> {
++    if email.trim().is_empty() || imap_host.trim().is_empty() || smtp_host.trim().is_empty() {
++        return Err("Email, IMAP host, and SMTP host are required".to_string());
++    }
++    Ok(())
++}
++
++fn resolve_account_test_password(email: &str, password: Option<String>) -> Result<String, String> {
++    match password {
++        Some(password) if !password.trim().is_empty() => Ok(password),
++        _ => SecurityService::get_password(email)
++            .map_err(|_| "Missing password for account connection test".to_string()),
++    }
++}
++
+ #[tauri::command]
+ pub async fn get_accounts_detailed(db: State<'_, Database>) -> Result<Vec<AccountInfo>, String> {
+     db.get_accounts_detailed().await.map_err(|e| e.to_string())
+@@ -24,6 +39,7 @@ pub async fn update_account_details(
+     smtp_port: u16,
+     smtp_use_tls: bool,
+ ) -> Result<(), String> {
++    validate_account_update(&email, &imap_host, &smtp_host)?;
+     db.upsert_account(
+         &email,
+         display_name.as_deref(),
+@@ -60,32 +76,25 @@ pub async fn test_account_connection(
+     password: Option<String>,
+ ) -> Result<(), String> {
+     crate::info!("Testing connection for {}", email);
+-    
+-    let pass = password.unwrap_or_else(|| {
+-        SecurityService::get_password(&email).unwrap_or_default()
+-    });
++    let pass = resolve_account_test_password(&email, password)?;
+ 
+     // 1. 测试 IMAP
+     let mut imap_client = RealImapClient::new(&imap_host, imap_port, &email, imap_use_tls);
+-    if let Err(e) = imap_client.connect().await {
+-        return Err(format!("IMAP Connection Failed: {}", e));
+-    }
+-    if let Err(e) = imap_client.login(&email, &pass).await {
+-        return Err(format!("IMAP Login Failed: {}", e));
+-    }
++    imap_client
++        .connect()
++        .await
++        .map_err(|e| format!("IMAP Connection Failed: {}", e))?;
++    imap_client
++        .login(&email, &pass)
++        .await
++        .map_err(|e| format!("IMAP Login Failed: {}", e))?;
+     crate::info!("IMAP test success for {}", email);
+ 
+     // 2. 测试 SMTP
+     let smtp_client = RealSmtpClient::new(&smtp_host, smtp_port, smtp_use_tls);
+-    // RealSmtpClient 目前没有显式的 connect 接口，但在发送时会连接。
+-    // 为了测试，我们可以尝试建立一个 TCP 连接。
+-    if smtp_use_tls {
+-        let connector = native_tls::TlsConnector::builder().build().map_err(|e| e.to_string())?;
+-        let stream = std::net::TcpStream::connect((smtp_host.as_str(), smtp_port)).map_err(|e| format!("SMTP TCP Connect Failed: {}", e))?;
+-        let _ = connector.connect(&smtp_host, stream).map_err(|e| format!("SMTP TLS Handshake Failed: {}", e))?;
+-    } else {
+-        let _ = std::net::TcpStream::connect((smtp_host.as_str(), smtp_port)).map_err(|e| format!("SMTP TCP Connect Failed: {}", e))?;
+-    }
++    smtp_client
++        .test_connectivity()
++        .map_err(|e| format!("SMTP Connection Failed: {}", e))?;
+     crate::info!("SMTP test success for {}", email);
+ 
+     Ok(())
+diff --git a/src-tauri/src/core/imap_client.rs b/src-tauri/src/core/imap_client.rs
+index 62b9d02..bab03bf 100644
+--- a/src-tauri/src/core/imap_client.rs
++++ b/src-tauri/src/core/imap_client.rs
+@@ -49,6 +49,16 @@ impl RealImapClient {
+         }
+     }
+ 
++    pub async fn test_connectivity(&self) -> Result<()> {
++        if self.use_tls {
++            let tls = native_tls::TlsConnector::builder().build()?;
++            let _ = imap::connect((self.host.as_str(), self.port), self.host.as_str(), &tls)?;
++        } else {
++            let _ = std::net::TcpStream::connect((self.host.as_str(), self.port))?;
++        }
++        Ok(())
++    }
++
+     async fn get_session(&self) -> Result<ImapState> {
+         let mut pool = self.pool.lock().await;
+         if let Some(session) = pool.sessions.pop() {
+@@ -93,8 +103,7 @@ impl RealImapClient {
+ #[async_trait]
+ impl MailClient for RealImapClient {
+     async fn connect(&mut self) -> Result<()> {
+-        // 连接池模式下，connect 可以是空操作，或者验证服务器是否可达
+-        Ok(())
++        self.test_connectivity().await
+     }
+ 
+     async fn login(&mut self, user: &str, pass: &str) -> Result<()> {
+diff --git a/src-tauri/src/core/smtp_client.rs b/src-tauri/src/core/smtp_client.rs
+index 40a89e4..bb6427c 100644
+--- a/src-tauri/src/core/smtp_client.rs
++++ b/src-tauri/src/core/smtp_client.rs
+@@ -17,6 +17,15 @@ impl RealSmtpClient {
+             use_tls,
+         }
+     }
++
++    pub fn test_connectivity(&self) -> Result<()> {
++        let stream = std::net::TcpStream::connect((self.host.as_str(), self.port))?;
++        if self.use_tls {
++            let connector = native_tls::TlsConnector::builder().build()?;
++            let _ = connector.connect(&self.host, stream)?;
++        }
++        Ok(())
++    }
+ }
+ 
+ #[async_trait]

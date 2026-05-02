@@ -1,0 +1,73 @@
+--- docs/04-execution/12-integration-mod-04/evidence/task-T-01/before/tauri.ts	2026-04-27 13:47:17
++++ docs/04-execution/12-integration-mod-04/evidence/task-T-01/after/tauri.ts	2026-04-27 13:47:56
+@@ -4,6 +4,7 @@
+ 
+ const MOCK_ACCOUNTS_KEY = "nexus-mail-mock-accounts";
+ const MOCK_CONFIG_KEY = "nexus-mail-mock-config";
++const MOCK_SEND_EMAIL_KEY = "nexus-mail-mock-send-email";
+ const defaultMockAccounts = [
+   {
+     id: "demo-id",
+@@ -48,6 +49,8 @@
+   syncEmailSubjectPrefix?: string;
+   emptyFolders?: string[];
+   folderSubjectMode?: "folder-key";
++  sendShouldFail?: boolean;
++  sendFailMessage?: string;
+ };
+ 
+ const readMockConfig = (): MockConfig => {
+@@ -183,6 +186,19 @@
+     switch (cmd) {
+       case "send_email":
+         await new Promise(r => setTimeout(r, 500));
++        if (typeof window !== "undefined") {
++          try {
++            window.localStorage.setItem(
++              MOCK_SEND_EMAIL_KEY,
++              JSON.stringify({ ...args, timestamp: new Date().toISOString() })
++            );
++          } catch (error) {
++            console.warn("Failed to persist mock send payload", error);
++          }
++        }
++        if (config.sendShouldFail) {
++          throw new Error(config.sendFailMessage ?? "Mock send failed");
++        }
+         return "Mock email sent" as any;
+       case "sync_account":
+         await new Promise(r => setTimeout(r, 1000));
+--- docs/04-execution/12-integration-mod-04/evidence/task-T-01/before/compose.spec.ts	2026-04-27 13:47:17
++++ docs/04-execution/12-integration-mod-04/evidence/task-T-01/after/compose.spec.ts	2026-04-27 13:47:56
+@@ -1,10 +1,12 @@
+ import { test, expect } from '@playwright/test';
+ 
+ const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++const mockSendPayloadKey = 'nexus-mail-mock-send-email';
+ 
+ test.describe('Compose and Send Email', () => {
+   test.beforeEach(async ({ page }) => {
+     await page.goto('/');
++    await page.evaluate((key) => localStorage.removeItem(key), mockSendPayloadKey);
+     // Wait for initial load and account selection
+     await expect(page.locator('button[title="demo@nexus-mail.com"]')).toBeVisible();
+   });
+@@ -37,6 +39,18 @@
+ 
+     // 5. Modal should be closed after success
+     await expect(page.getByText('New Message')).not.toBeVisible();
++
++    const payload = await page.evaluate((key) => {
++      const stored = localStorage.getItem(key);
++      return stored ? JSON.parse(stored) : null;
++    }, mockSendPayloadKey);
++
++    expect(payload).toMatchObject({
++      to: 'test-receiver@nexus-mail.com',
++      cc: 'cc-person@nexus-mail.com',
++      bcc: 'bcc-person@nexus-mail.com',
++      subject: 'Test Subject from Playwright'
++    });
+   });
+ 
+   test('should prefill reply and forward content', async ({ page }) => {

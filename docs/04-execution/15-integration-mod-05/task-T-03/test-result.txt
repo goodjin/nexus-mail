@@ -1,0 +1,14 @@
+
+Running 5 tests using 1 worker
+
+[1A[2K[1/5] [chromium] › e2e/selection_toolbar.spec.ts:10:5 › Selection Toolbar › should show selection toolbar when an email is selected
+[1A[2K[2/5] [chromium] › e2e/selection_toolbar.spec.ts:26:5 › Selection Toolbar › should select all emails when "Select All" is clicked
+[1A[2K[3/5] [chromium] › e2e/selection_toolbar.spec.ts:40:5 › Selection Toolbar › should invert selection when "Invert Selection" is clicked
+[1A[2K[4/5] [chromium] › e2e/selection_toolbar.spec.ts:54:5 › Selection Toolbar › should clear selection when "Cancel" is clicked
+[1A[2K[5/5] [chromium] › e2e/selection_toolbar.spec.ts:67:5 › Selection Toolbar › should apply bulk actions and update list/badge
+[1A[2K  5 passed (3.8s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

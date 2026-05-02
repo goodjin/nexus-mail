@@ -1,0 +1,7 @@
+Task: T-04 附件场景
+Changes:
+- src/lib/tauri.ts: expose attachments in mock list for sample email
+- e2e/attachments_deep.spec.ts: ensure attachment email selection and detail readiness
+Tests:
+- npx playwright test e2e/attachments_deep.spec.ts --reporter=line
+Result: ✅ Passed

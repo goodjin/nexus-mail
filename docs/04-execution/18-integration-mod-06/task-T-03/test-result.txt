@@ -1,0 +1,10 @@
+
+Running 1 test using 1 worker
+
+[1A[2K[1/1] [chromium] › e2e/settings_shortcuts.spec.ts:32:3 › Settings & Shortcuts (MOD-06) › should persist theme setting after reload
+[1A[2K  1 passed (2.5s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

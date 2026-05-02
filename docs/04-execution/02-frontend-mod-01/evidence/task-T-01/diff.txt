@@ -1,0 +1,129 @@
+diff --git a/src/components/settings/SettingsModal.tsx b/src/components/settings/SettingsModal.tsx
+index 4829d1d..a5e1e94 100644
+--- a/src/components/settings/SettingsModal.tsx
++++ b/src/components/settings/SettingsModal.tsx
+@@ -28,6 +28,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
+   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+   const [testError, setTestError] = useState<string | null>(null);
++  const [authMethod, setAuthMethod] = useState<'password' | 'oauth'>('password');
+ 
+   const selectedAccount = accounts.find(a => a.id === selectedAccountId);
+ 
+@@ -35,6 +36,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+     if (selectedAccount) {
+       setEditForm({ ...selectedAccount });
+       setNewPassword('');
++      setAuthMethod('password');
+     }
+   }, [selectedAccountId, selectedAccount]);
+ 
+@@ -55,17 +57,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+             smtp_use_tls: true
+         });
+         setNewPassword('');
++        setAuthMethod('password');
+       } else {
+         setSelectedAccountId(null);
+         setEditForm(null);
++        setAuthMethod('password');
+       }
+     }
+   }, [isOpen, initialTab, initialAction]);
+ 
+   if (!isOpen) return null;
+ 
++  const isNewAccount = selectedAccountId === 'new';
++  const isPasswordAuth = authMethod === 'password';
++  const hasImapPort = Number.isFinite(editForm?.imap_port);
++  const hasSmtpPort = Number.isFinite(editForm?.smtp_port);
++  const requiredFieldsMissing = !editForm?.email?.trim()
++    || !editForm?.imap_host?.trim()
++    || !editForm?.smtp_host?.trim()
++    || !hasImapPort
++    || !hasSmtpPort
++    || (isNewAccount && isPasswordAuth && !newPassword);
++  const isSaveDisabled = saveStatus === 'saving' || requiredFieldsMissing;
++  const isTestDisabled = testStatus === 'testing' || requiredFieldsMissing;
++
+   const handleSaveAccount = async () => {
+-    if (!editForm) return;
++    if (!editForm || isSaveDisabled) return;
+     try {
+       setSaveStatus('saving');
+       await updateAccount(editForm);
+@@ -80,7 +97,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+   };
+ 
+   const handleTestConnection = async () => {
+-    if (!editForm) return;
++    if (!editForm || isTestDisabled) return;
+     try {
+       setTestStatus('testing');
+       setTestError(null);
+@@ -306,6 +323,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                               className="w-full bg-transparent border p-2 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none" 
+                             />
+                           </div>
++                          <div className="space-y-1 col-span-2">
++                            <label className="text-xs font-semibold text-nexus-muted uppercase tracking-wider">Auth Method</label>
++                            <select
++                              value={authMethod}
++                              onChange={e => setAuthMethod(e.target.value as 'password' | 'oauth')}
++                              className="w-full bg-transparent border p-2 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none"
++                            >
++                              <option value="password">Password</option>
++                              <option value="oauth">OAuth2 (Coming Soon)</option>
++                            </select>
++                            <p className="text-[11px] text-nexus-muted">
++                              {authMethod === 'oauth'
++                                ? 'OAuth2 flow will be available once discovery is enabled.'
++                                : 'Use a dedicated app password if required by your provider.'}
++                            </p>
++                          </div>
+                         </div>
+ 
+                         <div className="space-y-1">
+@@ -317,7 +350,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                               placeholder="Leave blank to keep current"
+                               value={newPassword}
+                               onChange={e => setNewPassword(e.target.value)}
+-                              className="w-full bg-transparent border p-2 pl-10 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none" 
++                              disabled={!isPasswordAuth}
++                              className={cn(
++                                "w-full bg-transparent border p-2 pl-10 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none",
++                                !isPasswordAuth && "opacity-60 cursor-not-allowed"
++                              )}
+                             />
+                           </div>
+                         </div>
+@@ -393,7 +430,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                         <Button 
+                           variant="primary" 
+                           onClick={handleSaveAccount}
+-                          disabled={saveStatus === 'saving' || !editForm.email || (selectedAccountId === 'new' && !newPassword)}
++                          disabled={isSaveDisabled}
+                           className={cn("px-8", saveStatus === 'success' && "bg-green-600 hover:bg-green-700")}
+                         >
+                           {saveStatus === 'saving' 
+@@ -406,7 +443,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                         <Button
+                           variant="ghost"
+                           onClick={handleTestConnection}
+-                          disabled={testStatus === 'testing' || !editForm.email || (selectedAccountId === 'new' && !newPassword)}
++                          disabled={isTestDisabled}
+                           className={cn(
+                             "px-4 border border-nexus-muted/20 hover:bg-nexus-muted/5 flex items-center gap-2",
+                             testStatus === 'success' && "text-green-600 border-green-200 bg-green-50",
+@@ -426,6 +463,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                         </Button>
+ 
+                         {saveStatus === 'error' && <span className="text-xs text-red-500 font-medium">Failed to save. Check your input.</span>}
++                        {requiredFieldsMissing && (
++                          <span className="text-xs text-nexus-muted font-medium">
++                            Fill in required email and server settings to continue.
++                          </span>
++                        )}
+                         {testStatus === 'error' && testError && (
+                           <div className="w-full mt-2 p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 animate-in fade-in slide-in-from-top-1">
+                             <strong>Test Failed:</strong> {testError}

@@ -1,0 +1,124 @@
+diff --git a/src-tauri/src/core/sync_engine.rs b/src-tauri/src/core/sync_engine.rs
+index bfecdeb..97fb45d 100644
+--- a/src-tauri/src/core/sync_engine.rs
++++ b/src-tauri/src/core/sync_engine.rs
+@@ -90,12 +90,22 @@ impl SyncEngine {
+             .await
+             .context("Failed to fetch last UID from database")?;
+ 
+-        // 2. 抓取该 UID 之后的邮件
+-        let new_emails = match client.get_emails_since(folder_remote_id, last_uid).await {
+-            Ok(emails) => emails,
+-            Err(e) => {
+-                crate::error!("Sync failed for folder {}: {}", folder_remote_id, e);
+-                return Err(e).context("Failed to fetch new emails from client");
++        // 2. 抓取该 UID 之后的邮件（首次同步则拉取最新批次）
++        let new_emails = if last_uid == 0 {
++            match client.get_emails(folder_remote_id, 200).await {
++                Ok(emails) => emails,
++                Err(e) => {
++                    crate::error!("Initial sync failed for folder {}: {}", folder_remote_id, e);
++                    return Err(e).context("Failed to fetch initial emails from client");
++                }
++            }
++        } else {
++            match client.get_emails_since(folder_remote_id, last_uid).await {
++                Ok(emails) => emails,
++                Err(e) => {
++                    crate::error!("Sync failed for folder {}: {}", folder_remote_id, e);
++                    return Err(e).context("Failed to fetch new emails from client");
++                }
+             }
+         };
+ 
+@@ -121,25 +131,58 @@ impl SyncEngine {
+     ) -> Result<usize> {
+         client.select_folder(folder_remote_id).await?;
+         
+-        // 1. 获取远程所有 UID (简化：只比较最近的，或者全量)
+-        // 注意：真实场景下全量获取可能有性能问题，通常使用序列号或限定范围
+-        let remote_emails = client.get_emails(folder_remote_id, 1000).await?;
+-        let remote_uids: HashSet<String> = 
+-            remote_emails.into_iter().map(|e| e.uid).collect();
++        let last_uid = self.db.get_last_uid(folder_id).await?;
++        if last_uid == 0 {
++            return Ok(0);
++        }
++        let mut first_uid = self.db.get_first_uid(folder_id).await?;
++        if first_uid == 0 {
++            first_uid = last_uid;
++        }
++        let mut fetch_limit = last_uid
++            .saturating_sub(first_uid)
++            .saturating_add(1) as usize;
++        if fetch_limit < 50 {
++            fetch_limit = 50;
++        }
++        if fetch_limit > 1000 {
++            fetch_limit = 1000;
++        }
++        let remote_emails = client.get_emails(folder_remote_id, fetch_limit).await?;
++        let mut remote_uids = HashSet::new();
++        for email in remote_emails {
++            if let Ok(uid) = email.uid.parse::<u32>() {
++                remote_uids.insert(uid);
++            }
++        }
++        if remote_uids.is_empty() {
++            return Ok(0);
++        }
++        let remote_min = *remote_uids.iter().min().unwrap();
++        let remote_max = *remote_uids.iter().max().unwrap();
+ 
+         // 2. 获取本地所有 UID
+         let local_uids = self.db.get_all_uids_in_folder(folder_id).await?;
+ 
+-        // 3. 找出本地存在但远程不存在的
++        // 3. 找出本地存在但远程不存在的（仅清理在远端窗口内的 UID）
+         let to_delete: Vec<String> = local_uids
+             .into_iter()
+-            .filter(|uid| !remote_uids.contains(uid))
++            .filter(|uid| {
++                if let Ok(local_uid) = uid.parse::<u32>() {
++                    if local_uid < remote_min || local_uid > remote_max {
++                        return false;
++                    }
++                    return !remote_uids.contains(&local_uid);
++                }
++                false
++            })
+             .collect();
+ 
+         let count = to_delete.len();
+         for uid in to_delete {
+             self.db.delete_email_by_uid(folder_id, &uid).await?;
+         }
++        self.db.update_folder_unread_count(folder_id).await?;
+ 
+         Ok(count)
+     }
+@@ -176,6 +219,9 @@ impl SyncEngine {
+         for email in old_emails {
+             self.store_synced_email(folder_id, &email).await?;
+         }
++        if count > 0 {
++            self.db.update_folder_unread_count(folder_id).await?;
++        }
+ 
+         Ok(count)
+     }
+@@ -232,12 +278,12 @@ mod tests {
+         let remote_id = res.1;
+ 
+         // 2. 第一次同步邮件 (Mock 会返回初始邮件)
+-        // 注意：Mock 目前 get_emails_since 返回 1 封邮件
++        // 注意：首次同步会走 get_emails，Mock 返回 2 封邮件
+         let synced_count = engine
+             .sync_emails(&mut mock_client, &folder_id, &remote_id)
+             .await
+             .unwrap();
+-        assert_eq!(synced_count, 1);
++        assert_eq!(synced_count, 2);
+ 
+         // 3. 再次同步，last_uid 应该增加了，验证是否能继续抓取
+         let last_uid = engine.db.get_last_uid(&folder_id).await.unwrap();

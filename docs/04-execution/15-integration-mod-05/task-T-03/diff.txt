@@ -1,0 +1,39 @@
+--- docs/04-execution/15-integration-mod-05/task-T-03/before/selection_toolbar.spec.ts	2026-04-27 14:35:15
++++ docs/04-execution/15-integration-mod-05/task-T-03/after/selection_toolbar.spec.ts	2026-04-27 14:41:03
+@@ -63,4 +63,36 @@
+         // Toolbar should disappear
+         await expect(page.getByTestId('selected-count')).toHaveCount(0);
+     });
++
++    test('should apply bulk actions and update list/badge', async ({ page }) => {
++        const badge = page.getByTestId('badge-inbox');
++        const initialText = await badge.innerText();
++        const initialCount = Number.parseInt(initialText, 10);
++
++        const firstCard = page.locator('[data-testid^="email-card-"]').first();
++        const testId = await firstCard.getAttribute('data-testid');
++        expect(testId).toBeTruthy();
++
++        await firstCard.hover();
++        await firstCard.locator('..').locator('.rounded-full.border-2').click();
++        await expect(page.getByTestId('selected-count')).toContainText('1 selected');
++        await page.getByRole('button', { name: 'Mark unread' }).click();
++        await expect(badge).toHaveText(String(initialCount + 1));
++
++        await firstCard.hover();
++        await firstCard.locator('..').locator('.rounded-full.border-2').click();
++        await expect(page.getByTestId('selected-count')).toContainText('1 selected');
++        await page.getByRole('button', { name: 'Mark read' }).click();
++        await expect(badge).toHaveText(String(initialCount));
++
++        await page.evaluate(() => {
++            window.confirm = () => true;
++        });
++        await firstCard.hover();
++        await firstCard.locator('..').locator('.rounded-full.border-2').click();
++        await expect(page.getByTestId('selected-count')).toContainText('1 selected');
++        await page.getByTitle('Delete').evaluate((node) => (node as HTMLButtonElement).click());
++
++        await expect(page.locator(`[data-testid="${testId}"]`)).toHaveCount(0);
++    });
+ });

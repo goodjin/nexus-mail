@@ -1,0 +1,47 @@
+--- docs/04-execution/03-integration-mod-01/evidence/task-T-03/before/multi_account_persistence.spec.ts	2026-04-27 11:14:48
++++ docs/04-execution/03-integration-mod-01/evidence/task-T-03/after/multi_account_persistence.spec.ts	2026-04-27 11:16:04
+@@ -19,11 +19,15 @@
+ };
+ 
+ test.describe('Account Access & Switching', () => {
+-  test('should prevent creation when required fields are missing', async ({ page }) => {
++  test('should prevent creation when password is missing', async ({ page }) => {
+     await openAddAccount(page);
++    const email = `nopass-${Date.now()}@test.com`;
++    await page.locator('input[type="email"]').fill(email);
++    await page.locator('label:has-text("Display Name")').locator('..').locator('input').fill('No Pass');
+     const createButton = page.getByRole('button', { name: 'Create Account' });
+     await expect(createButton).toBeDisabled();
+     await expect(page.getByText('Fill in required email and server settings to continue.')).toBeVisible();
++    await expect(page.locator(`[data-testid="account-item-${email}"]`)).toHaveCount(0);
+   });
+ 
+   test('should create account and show success state', async ({ page }) => {
+@@ -46,13 +50,25 @@
+     await expect(page.locator(`button[title="${newEmail}"]`)).toBeVisible();
+   });
+ 
+-  test('should show connection test failure feedback', async ({ page }) => {
++  test('should show IMAP auth failure feedback', async ({ page }) => {
+     await openAddAccount(page);
+-    await fillAccountForm(page, `fail-${Date.now()}@test.com`, 'Fail Account', 'error');
++    const email = `fail-${Date.now()}@test.com`;
++    await fillAccountForm(page, email, 'Fail Account', 'error');
+     await page.getByRole('button', { name: 'Test Connection' }).click();
+     await expect(page.getByText('认证失败')).toBeVisible();
++    await expect(page.locator(`[data-testid="account-item-${email}"]`)).toHaveCount(0);
+   });
+ 
++  test('should show SMTP connection failure feedback', async ({ page }) => {
++    await openAddAccount(page);
++    const email = `smtp-fail-${Date.now()}@test.com`;
++    await fillAccountForm(page, email, 'SMTP Fail', 'password');
++    await page.locator('label:has-text("SMTP Host")').locator('..').locator('input').fill('smtp-fail.test');
++    await page.getByRole('button', { name: 'Test Connection' }).click();
++    await expect(page.getByText('连接失败')).toBeVisible();
++    await expect(page.locator(`[data-testid="account-item-${email}"]`)).toHaveCount(0);
++  });
++
+   test('should switch accounts from the sidebar', async ({ page }) => {
+     await openAddAccount(page);
+     const newEmail = `switch-${Date.now()}@test.com`;

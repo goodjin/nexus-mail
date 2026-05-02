@@ -1,0 +1,14 @@
+
+Running 5 tests using 5 workers
+
+[1A[2K[1/5] [chromium] › e2e/settings_shortcuts.spec.ts:44:3 › Settings & Shortcuts (MOD-06) › should respond to keyboard shortcuts
+[1A[2K[2/5] [chromium] › e2e/settings_shortcuts.spec.ts:20:3 › Settings & Shortcuts (MOD-06) › should follow system theme when set to system
+[1A[2K[3/5] [chromium] › e2e/settings_shortcuts.spec.ts:9:3 › Settings & Shortcuts (MOD-06) › should switch theme mode from settings
+[1A[2K[4/5] [chromium] › e2e/settings_shortcuts.spec.ts:32:3 › Settings & Shortcuts (MOD-06) › should persist theme setting after reload
+[1A[2K[5/5] [chromium] › e2e/settings_shortcuts.spec.ts:57:3 › Settings & Shortcuts (MOD-06) › should trigger sync shortcut
+[1A[2K  5 passed (4.4s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

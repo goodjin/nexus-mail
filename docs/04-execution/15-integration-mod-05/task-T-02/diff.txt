@@ -1,0 +1,26 @@
+--- docs/04-execution/15-integration-mod-05/task-T-02/before/search.spec.ts	2026-04-27 14:21:40
++++ docs/04-execution/15-integration-mod-05/task-T-02/after/search.spec.ts	2026-04-27 14:34:43
+@@ -26,7 +26,7 @@
+     await expect(page.getByText('No emails in this folder')).toBeVisible();
+   });
+ 
+-  test('should filter emails when searching', async ({ page }) => {
++  test('should apply filters and update search history', async ({ page }) => {
+     const searchInput = page.getByTestId('search-input');
+     
+     // 1. Wait for the list to load
+@@ -38,9 +38,14 @@
+     await searchInput.fill('Project');
+     
+     // 3. In our mock, search_emails returns exactly one result with "Found: Project"
++    const firstCard = page.locator('[data-testid^="email-card-"]').first();
+     await expect(page.locator('[data-testid^="email-card-"]')).toHaveCount(1);
++    await expect(firstCard.getByText('search', { exact: true })).toBeVisible();
++    await expect(firstCard.locator('svg.lucide-paperclip')).toBeVisible();
+     await expect(page.getByText('Found: Project')).toBeVisible();
+     await expect(page.getByTestId('search-history-item').first()).toHaveText('Project');
++    await page.getByTestId('search-history-item').first().click();
++    await expect(searchInput).toHaveValue('Project');
+ 
+     // 4. Clear search
+     await page.locator('button:has(svg.lucide-x)').click();

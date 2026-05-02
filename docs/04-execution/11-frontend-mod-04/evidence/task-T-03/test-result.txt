@@ -1,0 +1,14 @@
+
+> --package-name@0.1.0 test:e2e
+> playwright test compose.spec.ts
+
+
+Running 1 test using 1 worker
+
+[1A[2K[1/1] [chromium] › e2e/compose.spec.ts:10:3 › Compose and Send Email › should open compose modal and send email
+[1A[2K  1 passed (3.0s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

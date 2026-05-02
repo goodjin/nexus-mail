@@ -1,0 +1,58 @@
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-02/before/App.tsx	2026-04-27 11:37:21
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-02/after/App.tsx	2026-04-27 11:37:46
+@@ -61,23 +61,24 @@
+   }, [effectiveEmail?.uid]);
+   const [isComposeOpen, setIsComposeOpen] = useState(false);
+   const [settingsState, setSettingsState] = useState<{ isOpen: boolean, initialTab?: 'general' | 'accounts', initialAction?: 'add_account' }>({ isOpen: false });
+-  const [statusMsg, setStatusMsg] = useState<string | null>(null);
++  const [syncStatus, setSyncStatus] = useState<{ type: "loading" | "success" | "error"; message: string } | null>(null);
+ 
+   // Auto-hide status messages
+   useEffect(() => {
+-    if (statusMsg) {
+-      const timer = setTimeout(() => setStatusMsg(null), 3000);
+-      return () => clearTimeout(timer);
+-    }
+-  }, [statusMsg]);
++    if (!syncStatus || syncStatus.type === "loading") return;
++    const timer = setTimeout(() => setSyncStatus(null), 3000);
++    return () => clearTimeout(timer);
++  }, [syncStatus]);
+ 
+   const handleSync = async () => {
++    if (syncing) return;
+     try {
+-      setStatusMsg("Syncing account...");
++      setSyncStatus({ type: "loading", message: "Syncing account..." });
+       await sync();
+-      setStatusMsg("Sync completed!");
++      setSyncStatus({ type: "success", message: "Sync completed!" });
+     } catch (e) {
+-      setStatusMsg("Sync failed: " + e);
++      const message = e instanceof Error ? e.message : String(e);
++      setSyncStatus({ type: "error", message: `Sync failed: ${message}` });
+     }
+   };
+ 
+@@ -86,10 +87,18 @@
+   return (
+     <div className="flex h-screen w-full bg-nexus-background overflow-hidden text-nexus-foreground">
+       {/* Toast Notification */}
+-      {statusMsg && (
++      {syncStatus && (
+         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
+-          <Badge className="px-4 py-2 shadow-lg animate-in fade-in slide-in-from-bottom-4">
+-            {statusMsg}
++          <Badge
++            className={`px-4 py-2 shadow-lg animate-in fade-in slide-in-from-bottom-4 ${
++              syncStatus.type === "error"
++                ? "bg-red-500 text-white"
++                : syncStatus.type === "success"
++                ? "bg-emerald-500 text-white"
++                : "bg-nexus-accent text-white"
++            }`}
++          >
++            {syncStatus.message}
+           </Badge>
+         </div>
+       )}

@@ -1,0 +1,297 @@
+--- docs/04-execution/14-frontend-mod-05/evidence/task-T-04/before/EmailList.tsx	2026-04-27 14:06:56
++++ docs/04-execution/14-frontend-mod-05/evidence/task-T-04/after/EmailList.tsx	2026-04-27 14:07:04
+@@ -72,6 +72,8 @@
+         data-testid={`email-card-${email.uid}`}
+         selected={itemSelected}
+         onClick={() => onEmailSelect(email)}
++        draggable
++        onDragStart={(event) => handleDragStart(event, email.uid)}
+         className="cursor-pointer p-4 flex-1 relative overflow-hidden group/card"
+       >
+         {/* Red Flag Indicator (Top-Left) */}
+@@ -177,6 +179,7 @@
+   const showLoading = isLoading || isFolderLoading;
+   const showEmpty = !showLoading && hasFolder && emails.length === 0;
+   const loadingLabel = isFolderLoading && !hasFolder ? "Loading folders..." : "Loading emails...";
++  const dragMimeType = "application/x-nexus-mail-uids";
+ 
+   const toggleSelect = React.useCallback((uid: string, e: React.MouseEvent) => {
+     e.stopPropagation();
+@@ -208,6 +211,15 @@
+     await onMoveEmails(Array.from(selectedUids), moveTargetId);
+     setSelectedUids(new Set());
+     setMoveTargetId("");
++  };
++
++  const handleDragStart = (event: React.DragEvent, uid: string) => {
++    const dragUids = selectedUids.has(uid) ? Array.from(selectedUids) : [uid];
++    if (!selectedUids.has(uid)) {
++      setSelectedUids(new Set([uid]));
++    }
++    event.dataTransfer.setData(dragMimeType, JSON.stringify(dragUids));
++    event.dataTransfer.effectAllowed = "move";
+   };
+ 
+   const isAllSelected = emails.length > 0 && selectedUids.size === emails.length;
+--- docs/04-execution/14-frontend-mod-05/evidence/task-T-04/before/Sidebar.tsx	2026-04-27 14:06:56
++++ docs/04-execution/14-frontend-mod-05/evidence/task-T-04/after/Sidebar.tsx	2026-04-27 14:07:04
+@@ -1,8 +1,8 @@
+-import React from "react";
++import React, { useEffect, useState } from "react";
+ import { Folder } from "../../hooks/useMailbox";
+ import { Button } from "../ui/Button";
+ import { Badge } from "../ui/Badge";
+-import { RefreshCw, Mail, Inbox, Archive, Trash2, Settings, FileText, AlertOctagon } from "lucide-react";
++import { RefreshCw, Mail, Inbox, Archive, Trash2, Settings, FileText, AlertOctagon, Loader2 } from "lucide-react";
+ import { cn } from "../../lib/utils";
+ 
+ interface SidebarProps {
+@@ -10,6 +10,7 @@
+   selectedAccount: string | null;
+   onAccountChange: (account: string) => void;
+   folders: Folder[];
++  isFolderLoading: boolean;
+   selectedFolderId: string | null;
+   onFolderSelect: (id: string) => void;
+   onSync: () => void;
+@@ -17,6 +18,7 @@
+   onCompose: () => void;
+   onSettings: () => void;
+   onAddAccount: () => void;
++  onFolderDrop?: (folderId: string, uids: string[]) => void;
+ }
+ 
+ export const Sidebar: React.FC<SidebarProps> = ({
+@@ -24,6 +26,7 @@
+   selectedAccount,
+   onAccountChange,
+   folders,
++  isFolderLoading,
+   selectedFolderId,
+   onFolderSelect,
+   onSync,
+@@ -31,7 +34,35 @@
+   onCompose,
+   onSettings,
+   onAddAccount,
++  onFolderDrop,
+ }) => {
++  const [switchingAccount, setSwitchingAccount] = useState<string | null>(null);
++  const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
++  const dragMimeType = "application/x-nexus-mail-uids";
++
++  useEffect(() => {
++    if (switchingAccount && selectedAccount === switchingAccount) {
++      const timer = setTimeout(() => setSwitchingAccount(null), 500);
++      return () => clearTimeout(timer);
++    }
++  }, [selectedAccount, switchingAccount]);
++
++  const handleDrop = (event: React.DragEvent, folderId: string) => {
++    event.preventDefault();
++    setDragOverFolderId(null);
++    if (!onFolderDrop) return;
++    const payload = event.dataTransfer.getData(dragMimeType);
++    if (!payload) return;
++    try {
++      const uids = JSON.parse(payload);
++      if (Array.isArray(uids) && uids.length > 0) {
++        onFolderDrop(folderId, uids);
++      }
++    } catch (e) {
++      console.warn("Invalid drag payload", e);
++    }
++  };
++
+   return (
+     <aside className="h-full flex flex-shrink-0 bg-nexus-sidebar/90 backdrop-blur-md border-r">
+       {/* Account Bar (Spark-style) */}
+@@ -39,10 +70,15 @@
+         {accounts.map((acc) => {
+           const initials = acc.substring(0, 2).toUpperCase();
+           const isActive = selectedAccount === acc;
++          const isSwitching = switchingAccount === acc;
+           return (
+             <button
+               key={acc}
+-              onClick={() => onAccountChange(acc)}
++              onClick={() => {
++                if (acc === selectedAccount) return;
++                setSwitchingAccount(acc);
++                onAccountChange(acc);
++              }}
+               title={acc}
+               className={cn(
+                 "w-10 h-10 rounded-xl flex items-center justify-center text-xs font-bold transition-all duration-200 relative group shadow-sm",
+@@ -51,7 +87,7 @@
+                   : "bg-white/10 text-nexus-muted hover:bg-white/20 hover:text-nexus-foreground"
+               )}
+             >
+-              {initials}
++              {isSwitching ? <Loader2 className="w-4 h-4 animate-spin" /> : initials}
+               {/* Active Indicator Dot */}
+               {isActive && (
+                 <div className="absolute -left-3 top-1/2 -translate-y-1/2 w-1 h-4 bg-nexus-accent rounded-r-full" />
+@@ -115,69 +151,86 @@
+         </div>
+ 
+         <nav className="flex-1 overflow-y-auto px-2 space-y-1">
+-          {[...folders].sort((a, b) => {
+-            const getWeight = (f: Folder) => {
+-              const role = f.system_role?.toUpperCase();
+-              if (role === "INBOX") return 1;
+-              if (role === "DRAFTS") return 2;
+-              if (role === "SENT") return 3;
+-              if (role === "ARCHIVE") return 4;
+-              if (role === "SPAM") return 5;
+-              if (role === "TRASH") return 6;
+-              return 10;
+-            };
+-            const wA = getWeight(a);
+-            const wB = getWeight(b);
+-            if (wA !== wB) return wA - wB;
+-            return a.name.localeCompare(b.name);
+-          }).map((folder) => {
+-            const Icon = getFolderIcon(folder);
+-            const displayName = getLocalizedName(folder);
+-            return (
+-              <button
+-                key={folder.id}
+-                data-testid={`folder-${folder.name.toLowerCase()}`}
+-                onClick={() => onFolderSelect(folder.id)}
+-                className={cn(
+-                  "w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
+-                  selectedFolderId === folder.id 
+-                    ? "bg-nexus-primary text-nexus-primary-foreground" 
+-                    : "text-nexus-sidebar-foreground hover:bg-nexus-border/50"
+-                )}
+-              >
+-                <Icon className="w-4 h-4" />
+-                <span className="flex-1 text-left truncate">{displayName}</span>
+-                {folder.unread_count > 0 && (
+-                  <Badge 
+-                    data-testid={`badge-${folder.name.toLowerCase()}`}
+-                    variant={selectedFolderId === folder.id ? "secondary" : "primary"}
+-                    className="px-1.5 min-w-[1.25rem] justify-center"
+-                  >
+-                    {folder.unread_count}
+-                  </Badge>
+-                )}
+-              </button>
+-            );
+-          })}
++          {isFolderLoading && folders.length > 0 && (
++            <div className="px-3 py-2 text-[11px] text-nexus-muted">Refreshing folders...</div>
++          )}
++          {isFolderLoading && folders.length === 0 ? (
++            <div className="px-3 py-2 text-[11px] text-nexus-muted">Loading folders...</div>
++          ) : (
++            folders.map((folder) => {
++              const Icon = getFolderIcon(folder);
++              const displayName = getLocalizedName(folder);
++              const folderKey = getFolderKey(folder);
++              return (
++                <button
++                  key={folder.id}
++                  data-testid={`folder-${folderKey}`}
++                  onClick={() => onFolderSelect(folder.id)}
++                  onDragOver={(event) => {
++                    event.preventDefault();
++                    setDragOverFolderId(folder.id);
++                  }}
++                  onDragLeave={() => setDragOverFolderId(prev => (prev === folder.id ? null : prev))}
++                  onDrop={(event) => handleDrop(event, folder.id)}
++                  className={cn(
++                    "w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
++                    selectedFolderId === folder.id 
++                      ? "bg-nexus-primary text-nexus-primary-foreground" 
++                      : "text-nexus-sidebar-foreground hover:bg-nexus-border/50",
++                    dragOverFolderId === folder.id && "bg-nexus-border/70 ring-1 ring-nexus-accent/40"
++                  )}
++                >
++                  <Icon className="w-4 h-4" />
++                  <span className="flex-1 text-left truncate">{displayName}</span>
++                  {folder.unread_count > 0 && (
++                    <Badge 
++                      data-testid={`badge-${folderKey}`}
++                      variant={selectedFolderId === folder.id ? "secondary" : "primary"}
++                      className="px-1.5 min-w-[1.25rem] justify-center"
++                    >
++                      {folder.unread_count}
++                    </Badge>
++                  )}
++                </button>
++              );
++            })
++          )}
+         </nav>
+       </div>
+     </aside>
+   );
+ };
+ 
++function getFolderRole(folder: Folder) {
++  if (folder.system_role) return folder.system_role.toUpperCase();
++  const name = folder.name.toLowerCase();
++  if (name.includes("inbox") || name.includes("收件箱")) return "INBOX";
++  if (name.includes("sent") || name.includes("已发送")) return "SENT";
++  if (name.includes("draft") || name.includes("草稿")) return "DRAFTS";
++  if (name.includes("archive") || name.includes("归档")) return "ARCHIVE";
++  if (name.includes("spam") || name.includes("junk") || name.includes("垃圾邮件")) return "SPAM";
++  if (name.includes("trash") || name.includes("deleted") || name.includes("垃圾箱") || name.includes("已删除")) return "TRASH";
++  return null;
++}
++
++function getFolderKey(folder: Folder) {
++  const role = getFolderRole(folder);
++  return (role ?? folder.name).toLowerCase();
++}
++
+ function getLocalizedName(folder: Folder) {
+-  const role = folder.system_role?.toUpperCase();
++  const role = getFolderRole(folder);
+   if (role === "INBOX") return "收件箱";
+   if (role === "SENT") return "已发送";
+   if (role === "DRAFTS") return "草稿箱";
+-  if (role === "TRASH") return "已删除";
++  if (role === "TRASH") return "垃圾箱";
+   if (role === "SPAM") return "垃圾邮件";
+   if (role === "ARCHIVE") return "归档";
+-  return folder.name; // Fallback to server name
++  return folder.name;
+ }
+ 
+ function getFolderIcon(folder: Folder) {
+-  const role = folder.system_role?.toUpperCase();
++  const role = getFolderRole(folder);
+   if (role === "INBOX") return Inbox;
+   if (role === "SENT") return Mail;
+   if (role === "DRAFTS") return FileText;
+--- docs/04-execution/14-frontend-mod-05/evidence/task-T-04/before/App.tsx	2026-04-27 14:06:56
++++ docs/04-execution/14-frontend-mod-05/evidence/task-T-04/after/App.tsx	2026-04-27 14:07:04
+@@ -127,6 +127,17 @@
+   };
+ 
+   const currentFolder = folders.find(f => f.id === selectedFolderId);
++  const handleFolderDrop = async (folderId: string, uids: string[]) => {
++    if (!selectedFolderId || folderId === selectedFolderId) return;
++    try {
++      await moveEmails(uids, folderId);
++      if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
++        setSelectedEmail(null);
++      }
++    } catch (e) {
++      console.error("Folder drop move failed", e);
++    }
++  };
+ 
+   return (
+     <div className="flex h-screen w-full bg-nexus-background overflow-hidden text-nexus-foreground">
+@@ -164,6 +175,7 @@
+         }}
+         onSettings={() => setSettingsState({ isOpen: true, initialTab: 'general' })}
+         onAddAccount={() => setSettingsState({ isOpen: true, initialTab: 'accounts', initialAction: 'add_account' })}
++        onFolderDrop={handleFolderDrop}
+       />
+ 
+       <EmailList 

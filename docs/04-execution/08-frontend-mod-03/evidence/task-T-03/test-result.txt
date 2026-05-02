@@ -1,0 +1,11 @@
+
+Running 2 tests using 2 workers
+
+[1A[2K[1/2] [chromium] › e2e/attachments_deep.spec.ts:15:5 › Attachment Deep Integration › should show attachments and trigger download dialog
+[1A[2K[2/2] [chromium] › e2e/attachments_deep.spec.ts:33:5 › Attachment Deep Integration › should allow selecting attachments in compose modal
+[1A[2K  2 passed (4.4s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

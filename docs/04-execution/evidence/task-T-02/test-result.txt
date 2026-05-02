@@ -1,0 +1,52 @@
+   Compiling nexus-mail v0.1.0 (/Users/jin/github/nexus-mail/src-tauri)
+warning: unused import: `header::MessageId`
+  --> src/core/smtp_client.rs:32:87
+   |
+32 |         use lettre::message::{Attachment, MultiPart, SinglePart, header::ContentType, header::MessageId};
+   |                                                                                       ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `smtp_client`
+  --> src/commands.rs:87:9
+   |
+87 |     let smtp_client = RealSmtpClient::new(&smtp_host, smtp_port, smtp_use_tls);
+   |         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_smtp_client`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `acct_id`
+   --> src/core/sync_engine.rs:212:13
+    |
+212 |         let acct_id = engine
+    |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_acct_id`
+
+warning: unused variable: `engine`
+  --> src/lib.rs:46:17
+   |
+46 |             let engine = core::sync_engine::SyncEngine::new(db.clone());
+   |                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_engine`
+
+warning: variant `Disconnected` is never constructed
+  --> src/core/imap_client.rs:36:5
+   |
+35 | enum ImapState {
+   |      --------- variant in this enum
+36 |     Disconnected,
+   |     ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `nexus-mail` (lib test) generated 5 warnings (run `cargo fix --lib -p nexus-mail --tests` to apply 4 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.16s
+warning: the following packages contain code that will be rejected by a future version of Rust: imap-proto v0.10.2
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/nexus_mail_lib-4f7ff34fce09d7e0)
+
+running 3 tests
+test core::security::tests::test_custom_security_ops ... ok
+test core::security::tests::test_oauth_token_ops ... ok
+test core::security::tests::test_password_not_found ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 10.24s
+

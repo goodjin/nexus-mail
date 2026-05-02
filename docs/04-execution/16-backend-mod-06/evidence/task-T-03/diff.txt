@@ -1,0 +1,57 @@
+--- docs/04-execution/16-backend-mod-06/evidence/task-T-03/before/database.rs	2026-04-27 14:47:19
++++ docs/04-execution/16-backend-mod-06/evidence/task-T-03/after/database.rs	2026-04-27 14:48:06
+@@ -773,6 +773,24 @@
+             None => bail!("Invalid theme mode: {}", mode),
+         };
+         self.set_setting(SETTING_THEME_MODE, parsed.as_str()).await
++    }
++
++    pub async fn get_shortcuts(&self) -> Result<String> {
++        Ok(self
++            .get_setting(SETTING_SHORTCUTS)
++            .await?
++            .unwrap_or_else(|| "{}".to_string()))
++    }
++
++    pub async fn set_shortcuts(&self, shortcuts: &str) -> Result<()> {
++        let value: serde_json::Value = serde_json::from_str(shortcuts)
++            .context("Invalid shortcuts JSON")?;
++        if !value.is_object() {
++            bail!("Shortcut config must be a JSON object");
++        }
++        let normalized =
++            serde_json::to_string(&value).context("Failed to serialize shortcuts")?;
++        self.set_setting(SETTING_SHORTCUTS, &normalized).await
+     }
+ 
+     pub async fn record_search_history(&self, account_id: &str, query: &str) -> Result<()> {
+--- docs/04-execution/16-backend-mod-06/evidence/task-T-03/before/commands.rs	2026-04-27 14:47:19
++++ docs/04-execution/16-backend-mod-06/evidence/task-T-03/after/commands.rs	2026-04-27 14:48:06
+@@ -1553,6 +1553,16 @@
+ #[tauri::command]
+ pub async fn update_theme_mode(db: State<'_, Database>, mode: String) -> Result<(), String> {
+     db.set_theme_mode(&mode).await.map_err(|e| e.to_string())
++}
++
++#[tauri::command]
++pub async fn get_shortcuts(db: State<'_, Database>) -> Result<String, String> {
++    db.get_shortcuts().await.map_err(|e| e.to_string())
++}
++
++#[tauri::command]
++pub async fn update_shortcuts(db: State<'_, Database>, shortcuts: String) -> Result<(), String> {
++    db.set_shortcuts(&shortcuts).await.map_err(|e| e.to_string())
+ }
+ 
+ #[tauri::command]
+--- docs/04-execution/16-backend-mod-06/evidence/task-T-03/before/lib.rs	2026-04-27 14:47:19
++++ docs/04-execution/16-backend-mod-06/evidence/task-T-03/after/lib.rs	2026-04-27 14:48:06
+@@ -75,6 +75,8 @@
+             commands::update_setting,
+             commands::get_theme_mode,
+             commands::update_theme_mode,
++            commands::get_shortcuts,
++            commands::update_shortcuts,
+             commands::get_accounts_detailed,
+             commands::update_account_details,
+             commands::update_account_password,

@@ -1,0 +1,11 @@
+
+Running 2 tests using 2 workers
+
+[1A[2K[1/2] [chromium] › e2e/settings_shortcuts.spec.ts:20:3 › Settings & Shortcuts (MOD-06) › should follow system theme when set to system
+[1A[2K[2/2] [chromium] › e2e/settings_shortcuts.spec.ts:9:3 › Settings & Shortcuts (MOD-06) › should switch theme mode from settings
+[1A[2K  2 passed (2.6s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

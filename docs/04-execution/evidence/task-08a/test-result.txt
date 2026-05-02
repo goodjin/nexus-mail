@@ -1,0 +1,4 @@
+npm run build --silent: passed
+npm run test:e2e: passed
+cargo test --manifest-path src-tauri/Cargo.toml: passed
+npm run test:visual: passed

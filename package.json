@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "test": "npm run test:e2e",
     "test:visual": "playwright test visual.spec.ts",
     "test:visual:update": "playwright test visual.spec.ts --update-snapshots",
     "test:e2e": "playwright test compose.spec.ts"

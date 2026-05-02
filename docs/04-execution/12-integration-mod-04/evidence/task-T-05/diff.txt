@@ -1,0 +1,37 @@
+--- /dev/null	2026-04-27 14:40:12
++++ docs/04-execution/12-integration-mod-04/evidence/task-T-05/after/report.md	2026-04-27 14:40:12
+@@ -0,0 +1,34 @@
++# 执行报告 - 12-integration-mod-04
++
++## 执行概况
++- **计划**: docs/03-dev-plan/12-integration-mod-04.md
++- **开始时间**: 2026-04-27T05:47:03Z
++- **结束时间**: 2026-04-27T06:39:52Z
++- **状态**: ✅ 完成
++
++## 任务执行统计
++| 任务 | 状态 | 说明 |
++| --- | --- | --- |
++| T-01 | ✅ | 发送成功流程验证并记录发送 payload |
++| T-02 | ✅ | 回复/转发预填充与正文引用验证 |
++| T-03 | ✅ | 失败提示与草稿自动恢复覆盖 |
++| T-04 | ✅ | 附件添加与发送 payload 校验 |
++| T-05 | ✅ | 报告与证据归档 |
++
++## 变更摘要
++- Playwright mock 发送记录与失败配置覆盖。
++- 回复/转发正文预填充修复，新增测试辅助钩子。
++- 草稿保存间隔可配置，附件选择支持 Web 环境。
++
++## 测试结果
++- `npx playwright test e2e/compose.spec.ts -g "should open compose modal and send email"` ✅
++- `npx playwright test e2e/compose.spec.ts -g "should prefill reply and forward content"` ✅
++- `npx playwright test e2e/compose_resilience.spec.ts` ✅
++- `npx playwright test e2e/compose_attachments.spec.ts` ✅
++
++## 证据
++- `docs/04-execution/12-integration-mod-04/evidence/task-T-01`
++- `docs/04-execution/12-integration-mod-04/evidence/task-T-02`
++- `docs/04-execution/12-integration-mod-04/evidence/task-T-03`
++- `docs/04-execution/12-integration-mod-04/evidence/task-T-04`
++- `docs/04-execution/12-integration-mod-04/evidence/task-T-05`

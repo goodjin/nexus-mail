@@ -1,0 +1,82 @@
+--- docs/04-execution/11-frontend-mod-04/evidence/task-T-04/before/ComposeModal.tsx	2026-04-27 13:41:20
++++ docs/04-execution/11-frontend-mod-04/evidence/task-T-04/after/ComposeModal.tsx	2026-04-27 13:41:31
+@@ -27,18 +27,38 @@
+   const [error, setError] = useState<string | null>(null);
+   const [attachments, setAttachments] = useState<Array<{ name: string, path: string, size: number }>>([]);
+   const [isDragActive, setIsDragActive] = useState(false);
++  const [draftStatus, setDraftStatus] = useState<string | null>(null);
+   const maxAttachmentBytes = 25 * 1024 * 1024;
++  const draftKey = `nexus-compose-draft:${fromAccount}`;
+ 
++  const loadDraft = () => {
++    try {
++      const stored = localStorage.getItem(draftKey);
++      if (!stored) return null;
++      return JSON.parse(stored) as {
++        to?: string;
++        cc?: string;
++        bcc?: string;
++        subject?: string;
++        body?: string;
++      };
++    } catch {
++      return null;
++    }
++  };
++
+   React.useEffect(() => {
+     if (!isOpen) return;
+-    setTo(initialValues?.to ?? '');
+-    setCc(initialValues?.cc ?? '');
+-    setBcc(initialValues?.bcc ?? '');
+-    setSubject(initialValues?.subject ?? '');
+-    setBody(initialValues?.body ?? '');
++    const draft = initialValues ? null : loadDraft();
++    setTo(initialValues?.to ?? draft?.to ?? '');
++    setCc(initialValues?.cc ?? draft?.cc ?? '');
++    setBcc(initialValues?.bcc ?? draft?.bcc ?? '');
++    setSubject(initialValues?.subject ?? draft?.subject ?? '');
++    setBody(initialValues?.body ?? draft?.body ?? '');
+     setAttachments([]);
+     setError(null);
+     setSending(false);
++    setDraftStatus(draft ? "Draft loaded" : null);
+   }, [
+     isOpen,
+     initialValues?.to,
+@@ -48,6 +68,20 @@
+     initialValues?.body
+   ]);
+ 
++  React.useEffect(() => {
++    if (!isOpen) return;
++    const interval = setInterval(() => {
++      const payload = { to, cc, bcc, subject, body };
++      try {
++        localStorage.setItem(draftKey, JSON.stringify(payload));
++        setDraftStatus("Draft saved");
++      } catch {
++        setDraftStatus("Draft save failed");
++      }
++    }, 30000);
++    return () => clearInterval(interval);
++  }, [isOpen, to, cc, bcc, subject, body, draftKey]);
++
+   if (!isOpen) return null;
+ 
+   const applyAttachmentLimits = (newAttachments: Array<{ name: string; path: string; size: number }>) => {
+@@ -167,6 +201,14 @@
+               {error}
+             </div>
+           )}
++          {draftStatus && (
++            <div
++              data-testid="compose-draft-status"
++              className="text-[10px] text-nexus-muted"
++            >
++              {draftStatus}
++            </div>
++          )}
+           
+           <div className="flex items-center space-x-3 border-b pb-2">
+             <span className="text-nexus-muted w-12 text-sm">From:</span>

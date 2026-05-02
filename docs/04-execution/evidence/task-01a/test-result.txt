@@ -1,0 +1,2 @@
+npm run build --silent: PASS
+cargo test --manifest-path src-tauri/Cargo.toml test_settings_ -- --nocapture: PASS

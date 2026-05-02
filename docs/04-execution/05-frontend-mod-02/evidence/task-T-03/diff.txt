@@ -1,0 +1,16 @@
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-03/before/useMailbox.ts	2026-04-27 11:38:32
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-03/after/useMailbox.ts	2026-04-27 11:39:00
+@@ -63,9 +63,11 @@
+ 
+   // Fetch folders when account changes
+   useEffect(() => {
++    setSelectedFolderId(null);
++    setEmails([]);
++    setSearchQuery("");
++    setFolders([]);
+     if (!accountEmail) {
+-      setFolders([]);
+-      setSelectedFolderId(null);
+       return;
+     }
+ 

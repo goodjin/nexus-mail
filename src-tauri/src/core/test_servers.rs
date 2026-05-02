@@ -100,8 +100,12 @@ impl MockServers {
                             if line.contains("RFC822.HEADER") {
                                 let mut generated = 0;
                                 for i in start..=end {
-                                    if i > 1100 { break; }
-                                    if i < 1001 { continue; }
+                                    if i > 1100 {
+                                        break;
+                                    }
+                                    if i < 1001 {
+                                        continue;
+                                    }
                                     let idx = i - 1000;
                                     let header = format!("From: sender-{}@mock.com\r\nSubject: Mock Mail #{}\r\nDate: Mon, 23 Mar 2026 00:00:00 +0800\r\n\r\n", idx, idx);
                                     let resp = format!(
@@ -113,7 +117,9 @@ impl MockServers {
                                     );
                                     stream.write_all(resp.as_bytes())?;
                                     generated += 1;
-                                    if generated >= 150 { break; }
+                                    if generated >= 150 {
+                                        break;
+                                    }
                                 }
                             } else if line.contains("BODY[]") || line.contains("RFC822") {
                                 let (fetch_uid, index) = if line.starts_with("UID") {

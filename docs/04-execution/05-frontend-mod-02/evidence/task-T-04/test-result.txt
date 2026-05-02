@@ -1,0 +1,16 @@
+
+> --package-name@0.1.0 test:e2e
+> playwright test compose.spec.ts e2e/navigation.spec.ts
+
+
+Running 3 tests using 3 workers
+
+[1A[2K[1/3] [chromium] › e2e/navigation.spec.ts:22:3 › Navigation Flow › should handle account switching
+[1A[2K[2/3] [chromium] › e2e/navigation.spec.ts:10:3 › Navigation Flow › should switch folders and update email list
+[1A[2K[3/3] [chromium] › e2e/compose.spec.ts:10:3 › Compose and Send Email › should open compose modal and send email
+[1A[2K  3 passed (3.0s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

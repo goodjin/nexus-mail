@@ -1,0 +1,13 @@
+--- docs/04-execution/18-integration-mod-06/task-T-02/before/settings_shortcuts.spec.ts	2026-04-27 16:42:55
++++ docs/04-execution/18-integration-mod-06/task-T-02/after/settings_shortcuts.spec.ts	2026-04-27 16:43:58
+@@ -41,4 +41,10 @@
+     await page.keyboard.press('Control+,');
+     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+   });
++
++  test('should trigger sync shortcut', async ({ page }) => {
++    await page.keyboard.press('Control+Shift+S');
++    await expect(page.getByText('Syncing account...')).toBeVisible();
++    await expect(page.getByText('Sync completed!')).toBeVisible();
++  });
+ });

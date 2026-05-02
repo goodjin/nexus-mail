@@ -1,0 +1,250 @@
+--- docs/04-execution/14-frontend-mod-05/evidence/task-T-03/before/EmailList.tsx	2026-04-27 14:04:17
++++ docs/04-execution/14-frontend-mod-05/evidence/task-T-03/after/EmailList.tsx	2026-04-27 14:04:21
+@@ -1,5 +1,5 @@
+ import React from "react";
+-import { Email, SearchFilters, SearchHistoryEntry } from "../../hooks/useMailbox";
++import { Email, SearchFilters, SearchHistoryEntry, Folder, EmailBulkAction } from "../../hooks/useMailbox";
+ import { Card } from "../ui/Card";
+ import { Button } from "../ui/Button";
+ import { cn, formatDate } from "../../lib/utils";
+@@ -20,6 +20,10 @@
+   onSearchFiltersChange: (filters: SearchFilters) => void;
+   searchHistory: SearchHistoryEntry[];
+   onClearSearchHistory: () => void;
++  folders: Folder[];
++  currentFolderId: string | null;
++  onApplyEmailAction: (uids: string[], action: EmailBulkAction) => Promise<void>;
++  onMoveEmails: (uids: string[], targetFolderId: string) => Promise<void>;
+   onDeleteEmails: (uids: string[]) => Promise<void>;
+   onLoadMore: () => void;
+ }
+@@ -160,10 +164,15 @@
+   onSearchFiltersChange,
+   searchHistory,
+   onClearSearchHistory,
++  folders,
++  currentFolderId,
++  onApplyEmailAction,
++  onMoveEmails,
+   onDeleteEmails,
+   onLoadMore,
+ }) => {
+   const [selectedUids, setSelectedUids] = React.useState<Set<string>>(new Set());
++  const [moveTargetId, setMoveTargetId] = React.useState<string>("");
+   const showFolderPrompt = !hasFolder && !isFolderLoading;
+   const showLoading = isLoading || isFolderLoading;
+   const showEmpty = !showLoading && hasFolder && emails.length === 0;
+@@ -189,6 +198,18 @@
+     }
+   };
+ 
++  const handleBulkAction = async (action: EmailBulkAction) => {
++    await onApplyEmailAction(Array.from(selectedUids), action);
++    setSelectedUids(new Set());
++  };
++
++  const handleMove = async () => {
++    if (!moveTargetId) return;
++    await onMoveEmails(Array.from(selectedUids), moveTargetId);
++    setSelectedUids(new Set());
++    setMoveTargetId("");
++  };
++
+   const isAllSelected = emails.length > 0 && selectedUids.size === emails.length;
+ 
+   const toggleSelectAll = () => {
+@@ -220,8 +241,8 @@
+           <h2 className="text-lg font-semibold">{folderName}</h2>
+           {selectedUids.size > 0 && (
+             <div className="flex items-center gap-1 animate-in fade-in slide-in-from-right-2">
+-               <span data-testid="selected-count" className="text-[10px] font-bold bg-nexus-accent text-white w-5 h-5 flex items-center justify-center rounded-full mr-1">
+-                {selectedUids.size}
++              <span data-testid="selected-count" className="text-[11px] font-semibold text-nexus-foreground">
++                {selectedUids.size} selected
+               </span>
+               <Button variant="ghost" size="icon" onClick={toggleSelectAll} title={isAllSelected ? "Deselect All" : "Select All"} className="w-8 h-8">
+                 <div className={cn(
+@@ -239,7 +260,36 @@
+               </Button>
+               <Button variant="ghost" size="icon" onClick={invertSelection} title="Invert Selection" className="w-8 h-8">
+                  <RefreshCw className="w-4 h-4" />
++              </Button>
++              <Button variant="ghost" size="sm" onClick={() => handleBulkAction("mark_read")} className="px-2 text-[11px]">
++                Mark read
+               </Button>
++              <Button variant="ghost" size="sm" onClick={() => handleBulkAction("mark_unread")} className="px-2 text-[11px]">
++                Mark unread
++              </Button>
++              <Button variant="ghost" size="sm" onClick={() => handleBulkAction("flag")} className="px-2 text-[11px]">
++                Flag
++              </Button>
++              <Button variant="ghost" size="sm" onClick={() => handleBulkAction("unflag")} className="px-2 text-[11px]">
++                Unflag
++              </Button>
++              <select
++                value={moveTargetId}
++                onChange={(e) => setMoveTargetId(e.target.value)}
++                className="bg-nexus-sidebar/40 rounded-nexus px-2 py-1 text-[11px] border border-transparent focus:border-nexus-primary/40 outline-none"
++              >
++                <option value="">Move to...</option>
++                {folders
++                  .filter(folder => folder.id !== currentFolderId)
++                  .map(folder => (
++                    <option key={folder.id} value={folder.id}>
++                      {folder.name}
++                    </option>
++                  ))}
++              </select>
++              <Button variant="ghost" size="sm" onClick={handleMove} className="px-2 text-[11px]" disabled={!moveTargetId}>
++                Move
++              </Button>
+               <Button variant="ghost" size="icon" onClick={handleBulkDelete} title="Delete" className="w-8 h-8 text-red-500">
+                 <Trash2 className="w-4 h-4" />
+               </Button>
+--- docs/04-execution/14-frontend-mod-05/evidence/task-T-03/before/useMailbox.ts	2026-04-27 14:04:17
++++ docs/04-execution/14-frontend-mod-05/evidence/task-T-03/after/useMailbox.ts	2026-04-27 14:04:21
+@@ -41,6 +41,8 @@
+   query: string;
+   last_used_at: number;
+ };
++
++export type EmailBulkAction = "mark_read" | "mark_unread" | "flag" | "unflag" | "delete" | "archive";
+ 
+ const DEFAULT_SEARCH_FILTERS: SearchFilters = {
+   sender: "",
+@@ -401,9 +403,79 @@
+       setSearchHistory([]);
+     } catch (e) {
+       console.error("Failed to clear search history", e);
++    }
++  };
++
++  const applyEmailAction = async (uids: string[], action: EmailBulkAction) => {
++    if (!accountEmail || !selectedFolderId || uids.length === 0) return;
++    const previousEmails = [...emails];
++    const previousFolders = [...folders];
++    let unreadDelta = 0;
++
++    if (action === "delete") {
++      setEmails(emails.filter(e => !uids.includes(e.uid)));
++    } else {
++      setEmails(emails.map(e => {
++        if (!uids.includes(e.uid)) return e;
++        const flags = e.flags ?? [];
++        if (action === "mark_read" && !flags.includes("\\Seen")) {
++          unreadDelta -= 1;
++          return { ...e, flags: [...flags, "\\Seen"] };
++        }
++        if (action === "mark_unread" && flags.includes("\\Seen")) {
++          unreadDelta += 1;
++          return { ...e, flags: flags.filter(f => f !== "\\Seen") };
++        }
++        if (action === "flag" && !flags.includes("\\Flagged")) {
++          return { ...e, flags: [...flags, "\\Flagged"] };
++        }
++        if (action === "unflag" && flags.includes("\\Flagged")) {
++          return { ...e, flags: flags.filter(f => f !== "\\Flagged") };
++        }
++        return e;
++      }));
++    }
++
++    if (unreadDelta !== 0) {
++      setFolders(folders.map(folder => {
++        if (folder.id !== selectedFolderId) return folder;
++        return { ...folder, unread_count: Math.max(0, folder.unread_count + unreadDelta) };
++      }));
+     }
++
++    try {
++      await invoke("apply_email_action", {
++        account_email: accountEmail,
++        folder_id: selectedFolderId,
++        uids,
++        action,
++      });
++    } catch (e) {
++      console.error("Bulk action failed", e);
++      setEmails(previousEmails);
++      setFolders(previousFolders);
++      throw e;
++    }
+   };
+ 
++  const moveEmails = async (uids: string[], targetFolderId: string) => {
++    if (!accountEmail || !selectedFolderId || uids.length === 0) return;
++    const previousEmails = [...emails];
++    setEmails(emails.filter(e => !uids.includes(e.uid)));
++    try {
++      await invoke("move_emails", {
++        accountEmail,
++        source_folder_id: selectedFolderId,
++        target_folder_id: targetFolderId,
++        uids,
++      });
++    } catch (e) {
++      console.error("Move emails failed", e);
++      setEmails(previousEmails);
++      throw e;
++    }
++  };
++
+   return {
+     folders,
+     emails,
+@@ -424,5 +496,7 @@
+     setSearchFilters,
+     searchHistory,
+     clearSearchHistory,
++    applyEmailAction,
++    moveEmails,
+   };
+ }
+--- docs/04-execution/14-frontend-mod-05/evidence/task-T-03/before/App.tsx	2026-04-27 14:04:17
++++ docs/04-execution/14-frontend-mod-05/evidence/task-T-03/after/App.tsx	2026-04-27 14:04:21
+@@ -43,7 +43,9 @@
+     searchFilters,
+     setSearchFilters,
+     searchHistory,
+-    clearSearchHistory
++    clearSearchHistory,
++    applyEmailAction,
++    moveEmails
+   } = useMailbox(selectedAccount);
+ 
+   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
+@@ -184,6 +186,10 @@
+         onSearchFiltersChange={setSearchFilters}
+         searchHistory={searchHistory}
+         onClearSearchHistory={clearSearchHistory}
++        folders={folders}
++        currentFolderId={selectedFolderId}
++        onApplyEmailAction={applyEmailAction}
++        onMoveEmails={moveEmails}
+         onDeleteEmails={async (uids) => {
+             await deleteEmails(uids);
+             if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
+--- docs/04-execution/14-frontend-mod-05/evidence/task-T-03/before/tauri.ts	2026-04-27 14:04:17
++++ docs/04-execution/14-frontend-mod-05/evidence/task-T-03/after/tauri.ts	2026-04-27 14:04:21
+@@ -275,6 +275,10 @@
+             from: isDemo ? `sender-${id}@mock.com` : `${folderKey}-${id}@${accountEmail.split("@")[1] || "mock.com"}`, 
+             date: "Wed, 25 Mar 2026 10:19:36 +0800", 
+             snippet: isDemo && id == 100 ? "SECURITY TEST" : (isDemo ? `Mock content for message ${id}` : `Mock content for ${accountEmail} ${folderKey} ${id}`),
++            body_html: isDemo && id == 100
++              ? "<div><h1>Safe Title</h1><img src=\"x\" onerror=\"window.XSS_EXECUTED=true\" /><script>window.XSS_EXECUTED=true</script></div>"
++              : undefined,
++            body_text: isDemo && id == 100 ? "Safe Title" : undefined,
+             flags: id > 5 ? ["\\Seen"] : [] // Mock some unread
+           };
+         }) as any;
+@@ -322,6 +326,10 @@
+       case "get_attachment":
+         return new Uint8Array([72, 101, 108, 108, 111]) as any;
+       case "update_email_flag":
++      case "apply_email_action":
++        return { processed: args.uids?.length ?? 0, failed: [] } as any;
++      case "move_emails":
++        return { moved: args.uids?.length ?? 0, failed: [] } as any;
+       case "update_account_details":
+         if (cmd === "update_account_details") {
+           upsertMockAccount(args);

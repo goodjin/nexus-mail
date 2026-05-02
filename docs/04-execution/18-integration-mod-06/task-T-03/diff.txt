@@ -1,0 +1,93 @@
+--- docs/04-execution/18-integration-mod-06/task-T-03/before/settings_shortcuts.spec.ts	2026-04-27 16:45:34
++++ docs/04-execution/18-integration-mod-06/task-T-03/after/settings_shortcuts.spec.ts	2026-04-27 16:47:17
+@@ -29,6 +29,18 @@
+     await expect(page.locator('html')).not.toHaveClass(/dark/);
+   });
+ 
++  test('should persist theme setting after reload', async ({ page }) => {
++    await page.locator('button[title="Settings"]').click();
++    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
++
++    await page.getByTestId('theme-option-dark').click();
++    await expect(page.locator('html')).toHaveClass(/dark/);
++
++    await page.reload();
++    await page.waitForSelector('text=Nexus Mail Sample #100');
++    await expect(page.locator('html')).toHaveClass(/dark/);
++  });
++
+   test('should respond to keyboard shortcuts', async ({ page }) => {
+     await page.keyboard.press('Control+N');
+     await expect(page.getByText('New Message')).toBeVisible();
+--- docs/04-execution/18-integration-mod-06/task-T-03/before/tauri.ts	2026-04-27 16:45:34
++++ docs/04-execution/18-integration-mod-06/task-T-03/after/tauri.ts	2026-04-27 16:47:17
+@@ -5,6 +5,7 @@
+ const MOCK_ACCOUNTS_KEY = "nexus-mail-mock-accounts";
+ const MOCK_CONFIG_KEY = "nexus-mail-mock-config";
+ const MOCK_SEND_EMAIL_KEY = "nexus-mail-mock-send-email";
++const MOCK_SETTINGS_KEY = "nexus-mail-mock-settings";
+ const defaultMockAccounts = [
+   {
+     id: "demo-id",
+@@ -42,7 +43,35 @@
+ let mockAccounts = loadMockAccounts();
+ const mockSyncCounts: Record<string, number> = {};
+ const mockSearchHistory: Record<string, { query: string; last_used_at: number }[]> = {};
++const defaultMockSettings: Record<string, string> = {
++  auto_download_attachments: "false",
++  background_sync_history: "true",
++  theme: "system"
++};
+ 
++const loadMockSettings = () => {
++  if (typeof window === "undefined") {
++    return { ...defaultMockSettings };
++  }
++  try {
++    const stored = window.localStorage.getItem(MOCK_SETTINGS_KEY);
++    if (!stored) return { ...defaultMockSettings };
++    const parsed = JSON.parse(stored);
++    if (!parsed || typeof parsed !== "object") return { ...defaultMockSettings };
++    return { ...defaultMockSettings, ...(parsed as Record<string, string>) };
++  } catch (error) {
++    console.warn("Failed to load mock settings, using defaults.", error);
++    return { ...defaultMockSettings };
++  }
++};
++
++const persistMockSettings = (settings: Record<string, string>) => {
++  if (typeof window === "undefined") return;
++  window.localStorage.setItem(MOCK_SETTINGS_KEY, JSON.stringify(settings));
++};
++
++let mockSettings = loadMockSettings();
++
+ type MockConfig = {
+   syncShouldFail?: boolean;
+   syncFailMessage?: string;
+@@ -380,18 +409,20 @@
+         return {} as any;
+       case "update_account_password":
+       case "update_setting":
++        if (cmd === "update_setting" && args?.key) {
++          mockSettings = { ...mockSettings, [args.key]: String(args.value) };
++          persistMockSettings(mockSettings);
++        }
+         return {} as any;
+       case "get_all_settings":
+       case "get_settings":
+-        return {
+-          "auto_download_attachments": "false",
+-          "background_sync_history": "true",
+-          "theme": "system"
+-        } as any;
++        return { ...mockSettings } as any;
+       case "get_setting":
+         return "mock-value" as any;
+       case "reset_database":
+         resetMockAccounts();
++        mockSettings = { ...defaultMockSettings };
++        persistMockSettings(mockSettings);
+         return {} as any;
+       case "test_account_connection":
+         await new Promise(r => setTimeout(r, 1500));

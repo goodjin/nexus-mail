@@ -1,0 +1,60 @@
+--- docs/04-execution/16-backend-mod-06/evidence/task-T-04/before/database.rs	2026-04-27 14:49:04
++++ docs/04-execution/16-backend-mod-06/evidence/task-T-04/after/database.rs	2026-04-27 14:49:59
+@@ -923,9 +923,57 @@
+         assert!(column_names.contains(&"imap_security".to_string()));
+         assert!(column_names.contains(&"smtp_security".to_string()));
+         assert!(column_names.contains(&"auth_type".to_string()));
++    }
++
++    #[tokio::test]
++    async fn test_settings_defaults_seeded() {
++        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
++        let db = Database { pool };
++        db.init_tables().await.unwrap();
++
++        let auto_download = db
++            .get_setting(SETTING_AUTO_DOWNLOAD_ATTACHMENTS)
++            .await
++            .unwrap();
++        let background_sync = db
++            .get_setting(SETTING_BACKGROUND_SYNC_HISTORY)
++            .await
++            .unwrap();
++        let theme = db.get_setting(SETTING_THEME_MODE).await.unwrap();
++        let shortcuts = db.get_setting(SETTING_SHORTCUTS).await.unwrap();
++
++        assert_eq!(auto_download.as_deref(), Some("false"));
++        assert_eq!(background_sync.as_deref(), Some("true"));
++        assert_eq!(theme.as_deref(), Some("system"));
++        assert_eq!(shortcuts.as_deref(), Some("{}"));
++    }
++
++    #[tokio::test]
++    async fn test_settings_theme_roundtrip() {
++        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
++        let db = Database { pool };
++        db.init_tables().await.unwrap();
++
++        db.set_theme_mode("dark").await.unwrap();
++        assert_eq!(db.get_theme_mode().await.unwrap(), ThemeMode::Dark);
++        assert!(db.set_theme_mode("neon").await.is_err());
+     }
+ 
+     #[tokio::test]
++    async fn test_settings_shortcuts_validation() {
++        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
++        let db = Database { pool };
++        db.init_tables().await.unwrap();
++
++        db.set_shortcuts(r#"{"compose":"cmd+n"}"#).await.unwrap();
++        let stored = db.get_shortcuts().await.unwrap();
++        let parsed: serde_json::Value = serde_json::from_str(&stored).unwrap();
++        assert!(parsed.is_object());
++        assert!(db.set_shortcuts(r#"["bad"]"#).await.is_err());
++        assert!(db.set_shortcuts(r#"{invalid}"#).await.is_err());
++    }
++
++    #[tokio::test]
+     async fn test_upsert_logic() {
+         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+         let db = Database { pool };

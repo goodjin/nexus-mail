@@ -1,0 +1,9 @@
+Task: T-02 列表到详情主路径
+Changes:
+- e2e/mail_detail.spec.ts: add detail open, delete reset, and empty-body fallback coverage
+- src/components/mail/EmailDetail.tsx: fix hook ordering for detail rendering
+- src/components/mail/EmailList.tsx: stop selection toggle from blocking clicks
+- src/App.tsx: add test helper for selecting email
+Tests:
+- npx playwright test e2e/mail_detail.spec.ts --reporter=line
+Result: ✅ Passed

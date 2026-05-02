@@ -1,0 +1,16 @@
+
+Running 4 tests using 4 workers
+
+[1A[2K[1/4] [chromium] › e2e/ux_enhanced.spec.ts:9:5 › UX Enhancement (M30) › should only render a subset of emails due to virtualization
+[1A[2K[2/4] [chromium] › e2e/ux_enhanced.spec.ts:17:5 › UX Enhancement (M30) › should allow multi-selecting emails and showing bulk actions
+[1A[2K[3/4] [chromium] › e2e/ux_enhanced.spec.ts:32:5 › UX Enhancement (M30) › should show optimistic UI for flagging
+[1A[2K[4/4] [chromium] › e2e/ux_enhanced.spec.ts:44:5 › UX Enhancement (M30) › should trigger load more on scroll in virtuoso
+[1A[2K[chromium] › e2e/ux_enhanced.spec.ts:9:5 › UX Enhancement (M30) › should only render a subset of emails due to virtualization
+Rendered cards: 7
+
+[1A[2K  4 passed (2.6s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

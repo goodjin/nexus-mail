@@ -1,0 +1,3 @@
+Command: cd src-tauri && cargo test database && cargo test sync_engine
+Result: ok. database tests 7 passed; sync_engine tests 3 passed; 0 failed.
+Warnings: existing unused import/variable/dead_code warnings; no test failures.

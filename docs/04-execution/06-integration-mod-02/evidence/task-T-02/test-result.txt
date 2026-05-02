@@ -1,0 +1,11 @@
+
+Running 2 tests using 2 workers
+
+[1A[2K[1/2] [chromium] › e2e/sync_folder_integration.spec.ts:5:3 › Integration - Sync and Folders › should load folders and email list on first sync
+[1A[2K[2/2] [chromium] › e2e/sync_folder_integration.spec.ts:14:3 › Integration - Sync and Folders › should update unread count and list after refresh
+[1A[2K  2 passed (3.7s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

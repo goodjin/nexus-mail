@@ -1,0 +1,5 @@
+
+Running 1 test using 1 worker
+
+[1A[2K[1/1] [chromium] › e2e/multi_account_persistence.spec.ts:29:3 › Account Access & Switching › should create account and show success state
+[1A[2K  1 passed (2.2s)

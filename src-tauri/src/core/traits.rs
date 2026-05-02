@@ -13,6 +13,11 @@ pub struct AccountInfo {
     pub smtp_host: String,
     pub smtp_port: i64,
     pub smtp_use_tls: bool,
+    pub sync_enabled: bool,
+    pub sync_interval: i64,
+    pub last_sync: Option<i64>,
+    pub status: String,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -41,6 +46,13 @@ pub struct EmailDetails {
     pub body_html: Option<String>,
     pub body_text: Option<String>,
     pub attachments: Vec<AttachmentInfo>,
+    pub headers: Vec<EmailHeader>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EmailHeader {
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -49,6 +61,28 @@ pub struct AttachmentInfo {
     pub filename: String,
     pub mime_type: String,
     pub size: usize,
+    pub content_id: Option<String>,
+    pub is_inline: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SendEmailRequest {
+    pub from: String,
+    pub to: Vec<String>,
+    #[serde(default)]
+    pub cc: Vec<String>,
+    #[serde(default)]
+    pub bcc: Vec<String>,
+    pub subject: String,
+    pub body: String,
+    #[serde(default)]
+    pub attachments: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SendEmailResult {
+    pub raw: Vec<u8>,
+    pub message_id: String,
 }
 
 #[async_trait]
@@ -59,7 +93,12 @@ pub trait MailClient: Send + Sync {
     async fn select_folder(&mut self, folder: &str) -> Result<()>;
     async fn get_emails(&mut self, folder: &str, limit: usize) -> Result<Vec<EmailSummary>>;
     async fn get_emails_since(&mut self, folder: &str, last_uid: u32) -> Result<Vec<EmailSummary>>;
-    async fn get_emails_before(&mut self, folder: &str, before_uid: u32, limit: usize) -> Result<Vec<EmailSummary>>;
+    async fn get_emails_before(
+        &mut self,
+        folder: &str,
+        before_uid: u32,
+        limit: usize,
+    ) -> Result<Vec<EmailSummary>>;
     async fn get_email_details(&mut self, folder: &str, uid: &str) -> Result<EmailDetails>;
     async fn get_attachment(
         &mut self,
@@ -67,20 +106,17 @@ pub trait MailClient: Send + Sync {
         uid: &str,
         attachment_id: &str,
     ) -> Result<Vec<u8>>;
+    async fn create_folder(&mut self, name: &str) -> Result<()>;
+    async fn rename_folder(&mut self, old_name: &str, new_name: &str) -> Result<()>;
+    async fn delete_folder(&mut self, name: &str) -> Result<()>;
     async fn set_flag(&mut self, folder: &str, uid: &str, flag: &str, value: bool) -> Result<()>;
     async fn delete_email(&mut self, folder: &str, uid: &str) -> Result<()>;
+    async fn move_email(&mut self, folder: &str, uid: &str, target_folder: &str) -> Result<()>;
     async fn idle(&mut self, folder: &str) -> Result<()>;
     async fn append_message(&mut self, folder: &str, content: &[u8]) -> Result<()>;
 }
 
 #[async_trait]
 pub trait MailSender: Send + Sync {
-    async fn send_email(
-        &self,
-        from: &str,
-        to: &str,
-        subject: &str,
-        body: &str,
-        attachments: Vec<String>,
-    ) -> Result<(Vec<u8>, String)>;
+    async fn send_email(&self, request: &SendEmailRequest) -> Result<SendEmailResult>;
 }

@@ -1,0 +1,884 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index ad17e86..63f3681 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -9,6 +9,14 @@ import { ComposeModal } from "./components/mail/ComposeModal";
+ import { SettingsModal } from "./components/settings/SettingsModal";
+ import "./App.css";
+ 
++type ComposePreset = {
++  to?: string;
++  cc?: string;
++  bcc?: string;
++  subject?: string;
++  body?: string;
++};
++
+ const App: React.FC = () => {
+   const { 
+     accounts, 
+@@ -22,6 +30,7 @@ const App: React.FC = () => {
+     selectedFolderId,
+     setSelectedFolderId,
+     loading: emailsLoading,
++    foldersLoading,
+     syncing,
+     sync,
+     fetchEmailDetails,
+@@ -30,10 +39,17 @@ const App: React.FC = () => {
+     markAsRead,
+     loadMore,
+     searchQuery,
+-    setSearchQuery
++    setSearchQuery,
++    searchFilters,
++    setSearchFilters
+   } = useMailbox(selectedAccount);
+ 
+   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
++  const [composePreset, setComposePreset] = useState<ComposePreset | undefined>(undefined);
++
++  useEffect(() => {
++    setSelectedEmail(null);
++  }, [selectedAccount]);
+   
+   // Sync selectedEmail with the emails array if it was updated by pre-fetch
+   const effectiveEmail = React.useMemo(() => {
+@@ -57,23 +73,52 @@ const App: React.FC = () => {
+   }, [effectiveEmail?.uid]);
+   const [isComposeOpen, setIsComposeOpen] = useState(false);
+   const [settingsState, setSettingsState] = useState<{ isOpen: boolean, initialTab?: 'general' | 'accounts', initialAction?: 'add_account' }>({ isOpen: false });
+-  const [statusMsg, setStatusMsg] = useState<string | null>(null);
++  const [syncStatus, setSyncStatus] = useState<{ type: "loading" | "success" | "error"; message: string } | null>(null);
++
++  const escapeHtml = (value: string) =>
++    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
++
++  const buildQuotedBody = (email: Email) => {
++    const fallbackText = email.body_text || email.snippet || "";
++    const rawBody = email.body_html
++      ? email.body_html
++      : `<p>${escapeHtml(fallbackText).replace(/\n/g, "<br />")}</p>`;
++    const metaLines = [
++      "<p>--- Original Message ---</p>",
++      `<p>From: ${escapeHtml(email.from)}</p>`,
++      email.to?.length ? `<p>To: ${escapeHtml(email.to.join(", "))}</p>` : "",
++      `<p>Subject: ${escapeHtml(email.subject || "")}</p>`
++    ].filter(Boolean).join("");
++    return `<p></p>${metaLines}<blockquote>${rawBody}</blockquote>`;
++  };
++
++  const withSubjectPrefix = (prefix: string, subject?: string) => {
++    const trimmed = subject?.trim() ?? "";
++    if (!trimmed) return prefix.trim();
++    return trimmed.toLowerCase().startsWith(prefix.toLowerCase()) ? trimmed : `${prefix}${trimmed}`;
++  };
++
++  const handleCloseCompose = () => {
++    setIsComposeOpen(false);
++    setComposePreset(undefined);
++  };
+ 
+   // Auto-hide status messages
+   useEffect(() => {
+-    if (statusMsg) {
+-      const timer = setTimeout(() => setStatusMsg(null), 3000);
+-      return () => clearTimeout(timer);
+-    }
+-  }, [statusMsg]);
++    if (!syncStatus || syncStatus.type === "loading") return;
++    const timer = setTimeout(() => setSyncStatus(null), 3000);
++    return () => clearTimeout(timer);
++  }, [syncStatus]);
+ 
+   const handleSync = async () => {
++    if (syncing) return;
+     try {
+-      setStatusMsg("Syncing account...");
++      setSyncStatus({ type: "loading", message: "Syncing account..." });
+       await sync();
+-      setStatusMsg("Sync completed!");
++      setSyncStatus({ type: "success", message: "Sync completed!" });
+     } catch (e) {
+-      setStatusMsg("Sync failed: " + e);
++      const message = e instanceof Error ? e.message : String(e);
++      setSyncStatus({ type: "error", message: `Sync failed: ${message}` });
+     }
+   };
+ 
+@@ -82,25 +127,37 @@ const App: React.FC = () => {
+   return (
+     <div className="flex h-screen w-full bg-nexus-background overflow-hidden text-nexus-foreground">
+       {/* Toast Notification */}
+-      {statusMsg && (
++      {syncStatus && (
+         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
+-          <Badge className="px-4 py-2 shadow-lg animate-in fade-in slide-in-from-bottom-4">
+-            {statusMsg}
++          <Badge
++            className={`px-4 py-2 shadow-lg animate-in fade-in slide-in-from-bottom-4 ${
++              syncStatus.type === "error"
++                ? "bg-red-500 text-white"
++                : syncStatus.type === "success"
++                ? "bg-emerald-500 text-white"
++                : "bg-nexus-accent text-white"
++            }`}
++          >
++            {syncStatus.message}
+           </Badge>
+         </div>
+       )}
+ 
+       {/* Layers */}
+-      <Sidebar 
++        <Sidebar 
+         accounts={accounts.map(a => a.email)}
+         selectedAccount={selectedAccount}
+         onAccountChange={setSelectedAccount}
+         folders={folders}
++        isFolderLoading={foldersLoading}
+         selectedFolderId={selectedFolderId}
+         onFolderSelect={setSelectedFolderId}
+         onSync={handleSync}
+         isSyncing={syncing}
+-        onCompose={() => setIsComposeOpen(true)}
++        onCompose={() => {
++          setComposePreset(undefined);
++          setIsComposeOpen(true);
++        }}
+         onSettings={() => setSettingsState({ isOpen: true, initialTab: 'general' })}
+         onAddAccount={() => setSettingsState({ isOpen: true, initialTab: 'accounts', initialAction: 'add_account' })}
+       />
+@@ -117,8 +174,12 @@ const App: React.FC = () => {
+         }}
+         folderName={currentFolder?.name || "Inbox"}
+         isLoading={emailsLoading}
++        isFolderLoading={foldersLoading}
++        hasFolder={Boolean(selectedFolderId)}
+         searchQuery={searchQuery}
+         onSearchChange={setSearchQuery}
++        searchFilters={searchFilters}
++        onSearchFiltersChange={setSearchFilters}
+         onDeleteEmails={async (uids) => {
+             await deleteEmails(uids);
+             if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
+@@ -154,13 +215,29 @@ const App: React.FC = () => {
+                 setSelectedEmail({ ...selectedEmail, flags: newFlags });
+             }
+         }}
++        onReply={(email) => {
++          setComposePreset({
++            to: email.from,
++            subject: withSubjectPrefix("Re: ", email.subject),
++            body: buildQuotedBody(email)
++          });
++          setIsComposeOpen(true);
++        }}
++        onForward={(email) => {
++          setComposePreset({
++            subject: withSubjectPrefix("Fwd: ", email.subject),
++            body: buildQuotedBody(email)
++          });
++          setIsComposeOpen(true);
++        }}
+       />
+ 
+       {selectedAccount && (
+         <ComposeModal 
+           isOpen={isComposeOpen}
+-          onClose={() => setIsComposeOpen(false)}
++          onClose={handleCloseCompose}
+           fromAccount={selectedAccount}
++          initialValues={composePreset}
+         />
+       )}
+ 
+diff --git a/src/components/mail/EmailList.tsx b/src/components/mail/EmailList.tsx
+index 04ca1fe..2710aec 100644
+--- a/src/components/mail/EmailList.tsx
++++ b/src/components/mail/EmailList.tsx
+@@ -1,5 +1,5 @@
+ import React from "react";
+-import { Email } from "../../hooks/useMailbox";
++import { Email, SearchFilters } from "../../hooks/useMailbox";
+ import { Card } from "../ui/Card";
+ import { Button } from "../ui/Button";
+ import { cn, formatDate } from "../../lib/utils";
+@@ -12,8 +12,12 @@ interface EmailListProps {
+   onEmailSelect: (email: Email) => void;
+   folderName: string;
+   isLoading: boolean;
++  isFolderLoading: boolean;
++  hasFolder: boolean;
+   searchQuery: string;
+   onSearchChange: (query: string) => void;
++  searchFilters: SearchFilters;
++  onSearchFiltersChange: (filters: SearchFilters) => void;
+   onDeleteEmails: (uids: string[]) => Promise<void>;
+   onLoadMore: () => void;
+ }
+@@ -33,6 +37,8 @@ const EmailItem = React.memo(({
+   toggleSelect: (uid: string, e: React.MouseEvent) => void;
+   isSelectionMode: boolean;
+ }) => {
++  const isUnread = !email.flags?.includes("\\Seen");
++
+   return (
+     <div className="p-2 pt-1 pb-1 flex items-center gap-2 group">
+       <div className={cn(
+@@ -74,8 +80,12 @@ const EmailItem = React.memo(({
+           {/* Row 1: Subject (Title) */}
+           <div className="flex justify-between items-start gap-2">
+             <h3 className={cn(
+-              "text-sm font-bold truncate flex-1",
+-              itemSelected ? "text-nexus-primary-foreground" : "text-nexus-foreground"
++              "text-sm truncate flex-1",
++              itemSelected
++                ? "text-nexus-primary-foreground font-semibold"
++                : isUnread
++                  ? "text-nexus-foreground font-semibold"
++                  : "text-nexus-foreground/70 font-medium"
+             )}>
+               {email.subject || "(No Subject)"}
+             </h3>
+@@ -84,8 +94,12 @@ const EmailItem = React.memo(({
+           {/* Row 2: Sender & Time */}
+           <div className="flex justify-between items-center text-[11px]">
+             <span className={cn(
+-              "font-medium truncate max-w-[160px]",
+-              itemSelected ? "text-nexus-primary-foreground/90" : "text-nexus-muted"
++              "truncate max-w-[160px]",
++              itemSelected
++                ? "text-nexus-primary-foreground/90 font-medium"
++                : isUnread
++                  ? "text-nexus-foreground/80 font-semibold"
++                  : "text-nexus-muted font-medium"
+             )}>
+               {email.from}
+             </span>
+@@ -101,7 +115,11 @@ const EmailItem = React.memo(({
+           <div className="flex items-end gap-2 mt-0.5">
+             <div className={cn(
+               "text-xs line-clamp-1 flex-1",
+-              itemSelected ? "text-nexus-primary-foreground/80" : "text-nexus-muted"
++              itemSelected
++                ? "text-nexus-primary-foreground/80"
++                : isUnread
++                  ? "text-nexus-foreground/70"
++                  : "text-nexus-muted"
+             )}>
+               {email.snippet}
+             </div>
+@@ -132,12 +150,20 @@ export const EmailList: React.FC<EmailListProps> = ({
+   onEmailSelect,
+   folderName,
+   isLoading,
++  isFolderLoading,
++  hasFolder,
+   searchQuery,
+   onSearchChange,
++  searchFilters,
++  onSearchFiltersChange,
+   onDeleteEmails,
+   onLoadMore,
+ }) => {
+   const [selectedUids, setSelectedUids] = React.useState<Set<string>>(new Set());
++  const showFolderPrompt = !hasFolder && !isFolderLoading;
++  const showLoading = isLoading || isFolderLoading;
++  const showEmpty = !showLoading && hasFolder && emails.length === 0;
++  const loadingLabel = isFolderLoading && !hasFolder ? "Loading folders..." : "Loading emails...";
+ 
+   const toggleSelect = React.useCallback((uid: string, e: React.MouseEvent) => {
+     e.stopPropagation();
+@@ -179,6 +205,10 @@ export const EmailList: React.FC<EmailListProps> = ({
+     setSelectedUids(newSelected);
+   };
+ 
++  const updateFilters = (patch: Partial<SearchFilters>) => {
++    onSearchFiltersChange({ ...searchFilters, ...patch });
++  };
++
+   return (
+     <section className="h-full w-80 flex-shrink-0 flex flex-col border-r bg-nexus-background">
+       <header className="flex flex-col px-6 py-4 border-b gap-4">
+@@ -234,16 +264,65 @@ export const EmailList: React.FC<EmailListProps> = ({
+             </button>
+           )}
+         </div>
++        <div className="flex flex-wrap items-center gap-2 text-[11px] text-nexus-muted">
++          <input
++            type="text"
++            data-testid="filter-sender"
++            value={searchFilters.sender}
++            onChange={(e) => updateFilters({ sender: e.target.value })}
++            placeholder="From"
++            className="bg-nexus-sidebar/40 rounded-nexus px-2 py-1 border border-transparent focus:border-nexus-primary/40 outline-none w-24"
++          />
++          <div className="flex items-center gap-1">
++            <input
++              type="date"
++              data-testid="filter-start-date"
++              value={searchFilters.startDate}
++              onChange={(e) => updateFilters({ startDate: e.target.value })}
++              className="bg-nexus-sidebar/40 rounded-nexus px-2 py-1 border border-transparent focus:border-nexus-primary/40 outline-none"
++            />
++            <span className="text-[10px]">to</span>
++            <input
++              type="date"
++              data-testid="filter-end-date"
++              value={searchFilters.endDate}
++              onChange={(e) => updateFilters({ endDate: e.target.value })}
++              className="bg-nexus-sidebar/40 rounded-nexus px-2 py-1 border border-transparent focus:border-nexus-primary/40 outline-none"
++            />
++          </div>
++          <label className="flex items-center gap-1 cursor-pointer">
++            <input
++              type="checkbox"
++              data-testid="filter-attachments"
++              checked={searchFilters.hasAttachments}
++              onChange={(e) => updateFilters({ hasAttachments: e.target.checked })}
++              className="accent-nexus-accent"
++            />
++            <span>Attachments</span>
++          </label>
++          <select
++            data-testid="filter-folder-scope"
++            value={searchFilters.folderScope}
++            onChange={(e) => updateFilters({ folderScope: e.target.value as SearchFilters["folderScope"] })}
++            className="bg-nexus-sidebar/40 rounded-nexus px-2 py-1 border border-transparent focus:border-nexus-primary/40 outline-none"
++          >
++            <option value="current">This folder</option>
++            <option value="all">All folders</option>
++          </select>
++        </div>
+       </header>
+       
+       <div className="flex-1 overflow-hidden relative">
+-        {isLoading && emails.length === 0 && (
++        {showFolderPrompt && (
++          <div className="text-center py-10 text-nexus-muted text-sm">Select a folder to get started</div>
++        )}
++        {showLoading && (
+           <div className="absolute inset-0 z-10 flex items-center justify-center bg-nexus-background/50">
+-            <div className="text-nexus-muted text-sm">Loading emails...</div>
++            <div className="text-nexus-muted text-sm">{loadingLabel}</div>
+           </div>
+         )}
+-        {!isLoading && emails.length === 0 && (
+-          <div className="text-center py-10 text-nexus-muted text-sm">No emails found</div>
++        {showEmpty && (
++          <div className="text-center py-10 text-nexus-muted text-sm">No emails in this folder</div>
+         )}
+         
+         <Virtuoso
+diff --git a/src/hooks/useMailbox.ts b/src/hooks/useMailbox.ts
+index 233d55e..6135ce7 100644
+--- a/src/hooks/useMailbox.ts
++++ b/src/hooks/useMailbox.ts
+@@ -13,6 +13,9 @@ export interface Email {
+   uid: string;
+   subject: string;
+   from: string;
++  to?: string[];
++  cc?: string[];
++  headers?: Record<string, string>;
+   date: string;
+   snippet: string;
+   body_html?: string;
+@@ -26,31 +29,84 @@ export interface Email {
+   flags?: string[];
+ }
+ 
++export type SearchFilters = {
++  sender: string;
++  startDate: string;
++  endDate: string;
++  hasAttachments: boolean;
++  folderScope: "current" | "all";
++};
++
++const DEFAULT_SEARCH_FILTERS: SearchFilters = {
++  sender: "",
++  startDate: "",
++  endDate: "",
++  hasAttachments: false,
++  folderScope: "current",
++};
++
++const SYSTEM_ROLE_ORDER = ["INBOX", "SENT", "DRAFTS", "ARCHIVE", "SPAM", "TRASH"];
++
++const resolveFolderRole = (folder: Folder) => {
++  if (folder.system_role) return folder.system_role.toUpperCase();
++  const name = folder.name.toLowerCase();
++  if (name.includes("inbox") || name.includes("收件箱")) return "INBOX";
++  if (name.includes("sent") || name.includes("已发送")) return "SENT";
++  if (name.includes("draft") || name.includes("草稿")) return "DRAFTS";
++  if (name.includes("archive") || name.includes("归档")) return "ARCHIVE";
++  if (name.includes("spam") || name.includes("junk") || name.includes("垃圾邮件")) return "SPAM";
++  if (name.includes("trash") || name.includes("deleted") || name.includes("垃圾箱") || name.includes("已删除")) return "TRASH";
++  return null;
++};
++
++const sortFolders = (items: Folder[]) => {
++  return [...items].sort((a, b) => {
++    const roleA = resolveFolderRole(a);
++    const roleB = resolveFolderRole(b);
++    const idxA = roleA ? SYSTEM_ROLE_ORDER.indexOf(roleA) : -1;
++    const idxB = roleB ? SYSTEM_ROLE_ORDER.indexOf(roleB) : -1;
++    const weightA = idxA === -1 ? SYSTEM_ROLE_ORDER.length : idxA;
++    const weightB = idxB === -1 ? SYSTEM_ROLE_ORDER.length : idxB;
++    if (weightA !== weightB) return weightA - weightB;
++    return a.name.localeCompare(b.name);
++  });
++};
++
+ export function useMailbox(accountEmail: string | null) {
+   const [folders, setFolders] = useState<Folder[]>([]);
+   const [emails, setEmails] = useState<Email[]>([]);
+   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+   const [loading, setLoading] = useState(false);
++  const [foldersLoading, setFoldersLoading] = useState(false);
+   const [syncing, setSyncing] = useState(false);
+   const [searchQuery, setSearchQuery] = useState("");
++  const [searchFilters, setSearchFilters] = useState<SearchFilters>(DEFAULT_SEARCH_FILTERS);
+ 
+   // Fetch folders when account changes
+   useEffect(() => {
++    setSelectedFolderId(null);
++    setEmails([]);
++    setSearchQuery("");
++    setSearchFilters(DEFAULT_SEARCH_FILTERS);
++    setFolders([]);
+     if (!accountEmail) {
+-      setFolders([]);
+-      setSelectedFolderId(null);
++      setFoldersLoading(false);
+       return;
+     }
+ 
+     const fetchFolders = async () => {
++      setFoldersLoading(true);
+       try {
+         const flds: Folder[] = await invoke("get_folders", { accountEmail });
+-        setFolders(flds);
+-        if (flds.length > 0 && !selectedFolderId) {
+-          setSelectedFolderId(flds[0].id);
++        const ordered = sortFolders(flds);
++        setFolders(ordered);
++        if (ordered.length > 0) {
++          setSelectedFolderId(ordered[0].id);
+         }
+       } catch (e) {
+         console.error("Failed to fetch folders", e);
++      } finally {
++        setFoldersLoading(false);
+       }
+     };
+     fetchFolders();
+@@ -68,10 +124,26 @@ export function useMailbox(accountEmail: string | null) {
+       try {
+         let msgs: Email[];
+         if (searchQuery.trim()) {
+-           msgs = await invoke("search_emails", { 
+-            accountEmail: accountEmail,
+-            query: searchQuery 
+-          });
++           const trimmedSender = searchFilters.sender.trim();
++           const filterPayload = {
++             sender: trimmedSender ? trimmedSender : undefined,
++             start_date: searchFilters.startDate || undefined,
++             end_date: searchFilters.endDate || undefined,
++             has_attachments: searchFilters.hasAttachments ? true : undefined,
++             folder_ids:
++               searchFilters.folderScope === "current" && selectedFolderId
++                 ? [selectedFolderId]
++                 : undefined,
++           };
++           const hasFilters = Object.values(filterPayload).some(value => value !== undefined);
++           msgs = await invoke(
++             hasFilters ? "search_emails_with_filters" : "search_emails",
++             {
++               accountEmail,
++               query: searchQuery,
++               ...(hasFilters ? { filters: filterPayload } : {}),
++             }
++           );
+         } else {
+            msgs = await invoke("get_emails", { 
+             folderId: selectedFolderId, 
+@@ -87,7 +159,7 @@ export function useMailbox(accountEmail: string | null) {
+       }
+     };
+     fetchEmails();
+-  }, [selectedFolderId, accountEmail, searchQuery]);
++  }, [selectedFolderId, accountEmail, searchQuery, searchFilters]);
+   
+   // Background pre-fetching (Continuous)
+   useEffect(() => {
+@@ -151,8 +223,9 @@ export function useMailbox(accountEmail: string | null) {
+     try {
+       await invoke("sync_account", { email: accountEmail });
+       // Refresh folders and current email list
++      setFoldersLoading(true);
+       const flds: Folder[] = await invoke("get_folders", { accountEmail });
+-      setFolders(flds);
++      setFolders(sortFolders(flds));
+       
+       if (selectedFolderId) {
+         const msgs: Email[] = await invoke("get_emails", { 
+@@ -166,6 +239,7 @@ export function useMailbox(accountEmail: string | null) {
+       console.error("Sync failed", e);
+       throw e;
+     } finally {
++      setFoldersLoading(false);
+       setSyncing(false);
+     }
+   };
+@@ -301,6 +375,7 @@ export function useMailbox(accountEmail: string | null) {
+     selectedFolderId,
+     setSelectedFolderId,
+     loading,
++    foldersLoading,
+     syncing,
+     sync,
+     fetchEmailDetails,
+@@ -310,5 +385,7 @@ export function useMailbox(accountEmail: string | null) {
+     loadMore,
+     searchQuery,
+     setSearchQuery,
++    searchFilters,
++    setSearchFilters,
+   };
+ }
+diff --git a/src/lib/tauri.ts b/src/lib/tauri.ts
+index 44ac528..61d5840 100644
+--- a/src/lib/tauri.ts
++++ b/src/lib/tauri.ts
+@@ -2,54 +2,254 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+ 
+ export const isTauri = !!(window as any).__TAURI_INTERNALS__;
+ 
++const MOCK_ACCOUNTS_KEY = "nexus-mail-mock-accounts";
++const MOCK_CONFIG_KEY = "nexus-mail-mock-config";
++const MOCK_SEND_EMAIL_KEY = "nexus-mail-mock-send-email";
++const defaultMockAccounts = [
++  {
++    id: "demo-id",
++    email: "demo@nexus-mail.com",
++    display_name: "Demo User",
++    imap_host: "localhost",
++    imap_port: 993,
++    imap_use_tls: true,
++    smtp_host: "localhost",
++    smtp_port: 465,
++    smtp_use_tls: true,
++  },
++];
++
++const loadMockAccounts = () => {
++  if (typeof window === "undefined") {
++    return [...defaultMockAccounts];
++  }
++  try {
++    const stored = window.localStorage.getItem(MOCK_ACCOUNTS_KEY);
++    if (!stored) return [...defaultMockAccounts];
++    const parsed = JSON.parse(stored);
++    return Array.isArray(parsed) ? parsed : [...defaultMockAccounts];
++  } catch (error) {
++    console.warn("Failed to load mock accounts, using defaults.", error);
++    return [...defaultMockAccounts];
++  }
++};
++
++const persistMockAccounts = (accounts: typeof defaultMockAccounts) => {
++  if (typeof window === "undefined") return;
++  window.localStorage.setItem(MOCK_ACCOUNTS_KEY, JSON.stringify(accounts));
++};
++
++let mockAccounts = loadMockAccounts();
++const mockSyncCounts: Record<string, number> = {};
++
++type MockConfig = {
++  syncShouldFail?: boolean;
++  syncFailMessage?: string;
++  syncUnreadDelta?: Record<string, number>;
++  syncEmailSubjectPrefix?: string;
++  emptyFolders?: string[];
++  folderSubjectMode?: "folder-key";
++  sendShouldFail?: boolean;
++  sendFailMessage?: string;
++};
++
++const readMockConfig = (): MockConfig => {
++  if (typeof window === "undefined") {
++    return {};
++  }
++  try {
++    const stored = window.localStorage.getItem(MOCK_CONFIG_KEY);
++    if (!stored) return {};
++    const parsed = JSON.parse(stored);
++    return parsed && typeof parsed === "object" ? parsed : {};
++  } catch (error) {
++    console.warn("Failed to load mock config, using defaults.", error);
++    return {};
++  }
++};
++
++const resetMockAccounts = () => {
++  mockAccounts = [...defaultMockAccounts];
++  persistMockAccounts(mockAccounts);
++};
++
++const upsertMockAccount = (args: any) => {
++  const existingIndex = mockAccounts.findIndex((account) => account.email === args.email);
++  const nextAccount = {
++    id: existingIndex >= 0 ? mockAccounts[existingIndex].id : `mock-${Date.now()}`,
++    email: args.email,
++    display_name: args.displayName ?? null,
++    imap_host: args.imapHost,
++    imap_port: args.imapPort,
++    imap_use_tls: args.imapUseTls,
++    smtp_host: args.smtpHost,
++    smtp_port: args.smtpPort,
++    smtp_use_tls: args.smtpUseTls,
++  };
++  if (existingIndex >= 0) {
++    mockAccounts[existingIndex] = nextAccount;
++  } else {
++    mockAccounts.push(nextAccount);
++  }
++  persistMockAccounts(mockAccounts);
++};
++
++const resolveFolderCounts = (accountEmail: string) => {
++  const config = readMockConfig();
++  if (accountEmail === "demo@nexus-mail.com") {
++    const counts = { inbox: 95, sent: 0, drafts: 2, archive: 0, spam: 5, trash: 0 };
++    const updated = applySyncUnreadDelta(accountEmail, counts, config);
++    return applyEmptyFolderOverrides(updated, config);
++  }
++  const counts = { inbox: 12, sent: 1, drafts: 0, archive: 0, spam: 0, trash: 0 };
++  const updated = applySyncUnreadDelta(accountEmail, counts, config);
++  return applyEmptyFolderOverrides(updated, config);
++};
++
++const buildMockFolders = (accountEmail: string) => {
++  const counts = resolveFolderCounts(accountEmail);
++  return [
++    { id: `${accountEmail}::inbox`, name: "Inbox", remote_id: "inbox", unread_count: counts.inbox, system_role: "INBOX" },
++    { id: `${accountEmail}::sent`, name: "Sent", remote_id: "sent", unread_count: counts.sent, system_role: "SENT" },
++    { id: `${accountEmail}::drafts`, name: "Drafts", remote_id: "drafts", unread_count: counts.drafts, system_role: "DRAFTS" },
++    { id: `${accountEmail}::archive`, name: "Archive", remote_id: "archive", unread_count: counts.archive, system_role: "ARCHIVE" },
++    { id: `${accountEmail}::spam`, name: "Spam", remote_id: "spam", unread_count: counts.spam, system_role: "SPAM" },
++    { id: `${accountEmail}::trash`, name: "Trash", remote_id: "trash", unread_count: counts.trash, system_role: "TRASH" }
++  ];
++};
++
++const parseFolderId = (folderId?: string) => {
++  if (!folderId) {
++    return { accountEmail: mockAccounts[0]?.email ?? "demo@nexus-mail.com", folderKey: "inbox" };
++  }
++  const [accountEmail, folderKey] = folderId.split("::");
++  if (!folderKey) {
++    return { accountEmail: mockAccounts[0]?.email ?? accountEmail, folderKey: folderId };
++  }
++  return { accountEmail, folderKey };
++};
++
++const applySyncUnreadDelta = (
++  accountEmail: string,
++  counts: Record<string, number>,
++  config: MockConfig
++) => {
++  if (!config.syncUnreadDelta) return counts;
++  if ((mockSyncCounts[accountEmail] ?? 0) === 0) return counts;
++  const updated = { ...counts };
++  Object.entries(config.syncUnreadDelta).forEach(([key, delta]) => {
++    if (typeof delta !== "number") return;
++    const normalized = key.toLowerCase();
++    if (normalized in updated) {
++      updated[normalized] = Math.max(0, updated[normalized] + delta);
++    }
++  });
++  return updated;
++};
++
++const applyEmptyFolderOverrides = (counts: Record<string, number>, config: MockConfig) => {
++  if (!config.emptyFolders?.length) return counts;
++  const updated = { ...counts };
++  config.emptyFolders.forEach((folderKey) => {
++    const normalized = folderKey.toLowerCase();
++    if (normalized in updated) {
++      updated[normalized] = 0;
++    }
++  });
++  return updated;
++};
++
++const resolveMockSubject = (
++  accountEmail: string,
++  folderKey: string,
++  id: number,
++  config: MockConfig
++) => {
++  if (accountEmail !== "demo@nexus-mail.com") {
++    return `${accountEmail} ${folderKey.toUpperCase()} Message #${id}`;
++  }
++  if ((mockSyncCounts[accountEmail] ?? 0) > 0 && config.syncEmailSubjectPrefix) {
++    return `${config.syncEmailSubjectPrefix} #${id}`;
++  }
++  if (config.folderSubjectMode === "folder-key") {
++    return `${folderKey.toUpperCase()} Sample #${id}`;
++  }
++  return `Nexus Mail Sample #${id}`;
++};
++
+ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
+   if (!isTauri) {
+     console.log(`[Mock Invoke] ${cmd}`, args);
++    const config = readMockConfig();
+     
+     // 模拟不同命令的返回
+     switch (cmd) {
+       case "send_email":
+         await new Promise(r => setTimeout(r, 500));
++        if (typeof window !== "undefined") {
++          try {
++            window.localStorage.setItem(
++              MOCK_SEND_EMAIL_KEY,
++              JSON.stringify({ ...args, timestamp: new Date().toISOString() })
++            );
++          } catch (error) {
++            console.warn("Failed to persist mock send payload", error);
++          }
++        }
++        if (config.sendShouldFail) {
++          throw new Error(config.sendFailMessage ?? "Mock send failed");
++        }
+         return "Mock email sent" as any;
+       case "sync_account":
+         await new Promise(r => setTimeout(r, 1000));
++        if (config.syncShouldFail) {
++          throw new Error(config.syncFailMessage ?? "Mock sync failed");
++        }
++        if (args?.email) {
++          mockSyncCounts[args.email] = (mockSyncCounts[args.email] ?? 0) + 1;
++        }
+         return "Mock sync success" as any;
+       case "search_emails":
+         const q = args.query.toLowerCase();
+         return [
+           { uid: "search-1", subject: `Found: ${args.query}`, from: "search@mock.com", date: "Now", snippet: "Matching search result" }
+         ].filter(e => e.subject.toLowerCase().includes(q) || e.snippet.toLowerCase().includes(q)) as any;
++      case "search_emails_with_filters":
++        const query = args.query.toLowerCase();
++        const filters = args.filters ?? {};
++        const from = filters.sender ?? "search@mock.com";
++        const attachments = filters.has_attachments
++          ? [{ id: "mock-att", filename: "filter.pdf", size: 512, mime_type: "application/pdf" }]
++          : [];
++        return [
++          { uid: "search-1", subject: `Found: ${args.query}`, from, date: "Now", snippet: "Matching search result", attachments }
++        ]
++          .filter(e => e.subject.toLowerCase().includes(query) || e.snippet.toLowerCase().includes(query))
++          .filter(e => !filters.sender || e.from.toLowerCase().includes(filters.sender.toLowerCase()))
++          .filter(e => !filters.has_attachments || (e.attachments && e.attachments.length > 0)) as any;
+       case "list_accounts":
+-        return ["demo@nexus-mail.com"] as any;
++        return mockAccounts.map((account) => account.email) as any;
+       case "get_accounts_detailed":
+-        return [{
+-          id: "demo-id",
+-          email: "demo@nexus-mail.com",
+-          display_name: "Demo User",
+-          imap_host: "localhost",
+-          imap_port: 993,
+-          imap_use_tls: true,
+-          smtp_host: "localhost",
+-          smtp_port: 465,
+-          smtp_use_tls: true
+-        }] as any;
++        return mockAccounts.map((account) => ({ ...account })) as any;
+       case "get_folders":
+-        return [
+-          { id: "mock-inbox", name: "Inbox", remote_id: "inbox", unread_count: 95, system_role: "INBOX" },
+-          { id: "mock-sent", name: "Sent", remote_id: "sent", unread_count: 0, system_role: "SENT" },
+-          { id: "mock-drafts", name: "Drafts", remote_id: "drafts", unread_count: 2, system_role: "DRAFTS" },
+-          { id: "mock-spam", name: "Spam", remote_id: "spam", unread_count: 5, system_role: "SPAM" },
+-          { id: "mock-trash", name: "Trash", remote_id: "trash", unread_count: 0, system_role: "TRASH" }
+-        ] as any;
++        return buildMockFolders(args?.accountEmail ?? mockAccounts[0]?.email ?? "demo@nexus-mail.com") as any;
+       case "get_emails":
++        const { accountEmail, folderKey } = parseFolderId(args?.folderId);
++        if (config.emptyFolders?.map(f => f.toLowerCase()).includes(folderKey.toLowerCase())) {
++          return [] as any;
++        }
++        const isDemo = accountEmail === "demo@nexus-mail.com";
+         return Array.from({ length: 100 }, (_, i) => {
+           const id = 100 - i;
++          const subject = isDemo
++            ? resolveMockSubject(accountEmail, folderKey, id, config)
++            : `${accountEmail} ${folderKey.toUpperCase()} Message #${id}`;
+           return { 
+             uid: String(id), 
+-            subject: `Nexus Mail Sample #${id}`, 
+-            from: `sender-${id}@mock.com`, 
++            subject, 
++            from: isDemo ? `sender-${id}@mock.com` : `${folderKey}-${id}@${accountEmail.split("@")[1] || "mock.com"}`, 
+             date: "Wed, 25 Mar 2026 10:19:36 +0800", 
+-            snippet: `Mock content for message ${id}`,
++            snippet: isDemo ? `Mock content for message ${id}` : `Mock content for ${accountEmail} ${folderKey} ${id}`,
+             flags: id > 5 ? ["\\Seen"] : [] // Mock some unread
+           };
+         }) as any;
+@@ -58,12 +258,28 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
+           uid: args.uid,
+           body_html: "<div><h1>Mock Email Content</h1><p>This is a mock email.</p></div>",
+           body_text: "Mock Email Content",
+-          attachments: []
++          attachments: [
++            {
++              id: "mock-att-1",
++              filename: "welcome.pdf",
++              size: 2480,
++              mime_type: "application/pdf"
++            },
++            {
++              id: "mock-att-2",
++              filename: "preview.png",
++              size: 1024,
++              mime_type: "image/png"
++            }
++          ]
+         } as any;
+       case "get_attachment":
+         return new Uint8Array([72, 101, 108, 108, 111]) as any;
+       case "update_email_flag":
+       case "update_account_details":
++        if (cmd === "update_account_details") {
++          upsertMockAccount(args);
++        }
+       case "update_account_password":
+       case "update_setting":
+         return {} as any;
+@@ -76,10 +292,19 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
+         } as any;
+       case "get_setting":
+         return "mock-value" as any;
++      case "reset_database":
++        resetMockAccounts();
++        return {} as any;
+       case "test_account_connection":
+         await new Promise(r => setTimeout(r, 1500));
+         if (args.password === "error") {
+-          throw "Mock Connection Failed: Invalid password";
++          throw "IMAP Login Failed: Invalid password";
++        }
++        if (args.imapHost?.includes("imap-fail")) {
++          throw "IMAP Connection Failed: Mock IMAP connection failed";
++        }
++        if (args.smtpHost?.includes("smtp-fail") || args.smtpPort === 0) {
++          throw "SMTP Connection Failed: Mock SMTP connection failed";
+         }
+         return {} as any;
+       default:

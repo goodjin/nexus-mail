@@ -1,0 +1,98 @@
+--- docs/04-execution/16-backend-mod-06/evidence/task-T-02/before/database.rs	2026-04-27 14:45:16
++++ docs/04-execution/16-backend-mod-06/evidence/task-T-02/after/database.rs	2026-04-27 14:46:24
+@@ -1,5 +1,5 @@
+ use super::traits::{AccountInfo, FolderInfo};
+-use anyhow::{Context, Result};
++use anyhow::{bail, Context, Result};
+ use sqlx::{sqlite::SqlitePool, Row};
+ use std::path::Path;
+ 
+@@ -19,6 +19,32 @@
+     (SETTING_THEME_MODE, "system"),
+     (SETTING_SHORTCUTS, "{}"),
+ ];
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum ThemeMode {
++    Light,
++    Dark,
++    System,
++}
++
++impl ThemeMode {
++    fn parse(value: &str) -> Option<Self> {
++        match value {
++            "light" => Some(Self::Light),
++            "dark" => Some(Self::Dark),
++            "system" => Some(Self::System),
++            _ => None,
++        }
++    }
++
++    pub fn as_str(&self) -> &'static str {
++        match self {
++            Self::Light => "light",
++            Self::Dark => "dark",
++            Self::System => "system",
++        }
++    }
++}
+ 
+ impl Database {
+     fn derive_security_mode(port: u16, use_tls: bool) -> &'static str {
+@@ -733,6 +759,22 @@
+         Ok(res.map(|(v,)| v))
+     }
+ 
++    pub async fn get_theme_mode(&self) -> Result<ThemeMode> {
++        let value = self
++            .get_setting(SETTING_THEME_MODE)
++            .await?
++            .unwrap_or_else(|| "system".to_string());
++        Ok(ThemeMode::parse(&value).unwrap_or(ThemeMode::System))
++    }
++
++    pub async fn set_theme_mode(&self, mode: &str) -> Result<()> {
++        let parsed = match ThemeMode::parse(mode) {
++            Some(value) => value,
++            None => bail!("Invalid theme mode: {}", mode),
++        };
++        self.set_setting(SETTING_THEME_MODE, parsed.as_str()).await
++    }
++
+     pub async fn record_search_history(&self, account_id: &str, query: &str) -> Result<()> {
+         let trimmed = query.trim();
+         if trimmed.is_empty() {
+--- docs/04-execution/16-backend-mod-06/evidence/task-T-02/before/commands.rs	2026-04-27 14:45:16
++++ docs/04-execution/16-backend-mod-06/evidence/task-T-02/after/commands.rs	2026-04-27 14:46:24
+@@ -1543,6 +1543,19 @@
+ }
+ 
+ #[tauri::command]
++pub async fn get_theme_mode(db: State<'_, Database>) -> Result<String, String> {
++    db.get_theme_mode()
++        .await
++        .map(|mode| mode.as_str().to_string())
++        .map_err(|e| e.to_string())
++}
++
++#[tauri::command]
++pub async fn update_theme_mode(db: State<'_, Database>, mode: String) -> Result<(), String> {
++    db.set_theme_mode(&mode).await.map_err(|e| e.to_string())
++}
++
++#[tauri::command]
+ pub async fn dev_seed_data(db: State<'_, Database>) -> Result<String, String> {
+     let email = "demo@nexus-mail.com";
+     let acct_id = db
+--- docs/04-execution/16-backend-mod-06/evidence/task-T-02/before/lib.rs	2026-04-27 14:45:16
++++ docs/04-execution/16-backend-mod-06/evidence/task-T-02/after/lib.rs	2026-04-27 14:46:24
+@@ -73,6 +73,8 @@
+             commands::send_email,
+             commands::get_settings,
+             commands::update_setting,
++            commands::get_theme_mode,
++            commands::update_theme_mode,
+             commands::get_accounts_detailed,
+             commands::update_account_details,
+             commands::update_account_password,

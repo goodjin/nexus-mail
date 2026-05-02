@@ -1,0 +1,10 @@
+
+Running 1 test using 1 worker
+
+[1A[2K[1/1] [chromium] › e2e/drag_move.spec.ts:9:3 › Drag Move › should move email into target folder via drag and drop
+[1A[2K  1 passed (1.1s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

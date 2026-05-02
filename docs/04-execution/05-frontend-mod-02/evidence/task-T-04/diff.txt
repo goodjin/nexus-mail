@@ -1,0 +1,229 @@
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-04/before/useMailbox.ts	2026-04-27 11:40:25
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-04/after/useMailbox.ts	2026-04-27 11:42:11
+@@ -58,6 +58,7 @@
+   const [emails, setEmails] = useState<Email[]>([]);
+   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+   const [loading, setLoading] = useState(false);
++  const [foldersLoading, setFoldersLoading] = useState(false);
+   const [syncing, setSyncing] = useState(false);
+   const [searchQuery, setSearchQuery] = useState("");
+ 
+@@ -68,19 +69,23 @@
+     setSearchQuery("");
+     setFolders([]);
+     if (!accountEmail) {
++      setFoldersLoading(false);
+       return;
+     }
+ 
+     const fetchFolders = async () => {
++      setFoldersLoading(true);
+       try {
+         const flds: Folder[] = await invoke("get_folders", { accountEmail });
+         const ordered = sortFolders(flds);
+         setFolders(ordered);
+-        if (ordered.length > 0 && !selectedFolderId) {
++        if (ordered.length > 0) {
+           setSelectedFolderId(ordered[0].id);
+         }
+       } catch (e) {
+         console.error("Failed to fetch folders", e);
++      } finally {
++        setFoldersLoading(false);
+       }
+     };
+     fetchFolders();
+@@ -181,6 +186,7 @@
+     try {
+       await invoke("sync_account", { email: accountEmail });
+       // Refresh folders and current email list
++      setFoldersLoading(true);
+       const flds: Folder[] = await invoke("get_folders", { accountEmail });
+       setFolders(sortFolders(flds));
+       
+@@ -196,6 +202,7 @@
+       console.error("Sync failed", e);
+       throw e;
+     } finally {
++      setFoldersLoading(false);
+       setSyncing(false);
+     }
+   };
+@@ -331,6 +338,7 @@
+     selectedFolderId,
+     setSelectedFolderId,
+     loading,
++    foldersLoading,
+     syncing,
+     sync,
+     fetchEmailDetails,
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-04/before/Sidebar.tsx	2026-04-27 11:40:25
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-04/after/Sidebar.tsx	2026-04-27 11:42:11
+@@ -10,6 +10,7 @@
+   selectedAccount: string | null;
+   onAccountChange: (account: string) => void;
+   folders: Folder[];
++  isFolderLoading: boolean;
+   selectedFolderId: string | null;
+   onFolderSelect: (id: string) => void;
+   onSync: () => void;
+@@ -24,6 +25,7 @@
+   selectedAccount,
+   onAccountChange,
+   folders,
++  isFolderLoading,
+   selectedFolderId,
+   onFolderSelect,
+   onSync,
+@@ -129,36 +131,43 @@
+         </div>
+ 
+         <nav className="flex-1 overflow-y-auto px-2 space-y-1">
+-          {folders.map((folder) => {
+-            const Icon = getFolderIcon(folder);
+-            const displayName = getLocalizedName(folder);
+-            const folderKey = getFolderKey(folder);
+-            return (
+-              <button
+-                key={folder.id}
+-                data-testid={`folder-${folderKey}`}
+-                onClick={() => onFolderSelect(folder.id)}
+-                className={cn(
+-                  "w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
+-                  selectedFolderId === folder.id 
+-                    ? "bg-nexus-primary text-nexus-primary-foreground" 
+-                    : "text-nexus-sidebar-foreground hover:bg-nexus-border/50"
+-                )}
+-              >
+-                <Icon className="w-4 h-4" />
+-                <span className="flex-1 text-left truncate">{displayName}</span>
+-                {folder.unread_count > 0 && (
+-                  <Badge 
+-                    data-testid={`badge-${folderKey}`}
+-                    variant={selectedFolderId === folder.id ? "secondary" : "primary"}
+-                    className="px-1.5 min-w-[1.25rem] justify-center"
+-                  >
+-                    {folder.unread_count}
+-                  </Badge>
+-                )}
+-              </button>
+-            );
+-          })}
++          {isFolderLoading && folders.length > 0 && (
++            <div className="px-3 py-2 text-[11px] text-nexus-muted">Refreshing folders...</div>
++          )}
++          {isFolderLoading && folders.length === 0 ? (
++            <div className="px-3 py-2 text-[11px] text-nexus-muted">Loading folders...</div>
++          ) : (
++            folders.map((folder) => {
++              const Icon = getFolderIcon(folder);
++              const displayName = getLocalizedName(folder);
++              const folderKey = getFolderKey(folder);
++              return (
++                <button
++                  key={folder.id}
++                  data-testid={`folder-${folderKey}`}
++                  onClick={() => onFolderSelect(folder.id)}
++                  className={cn(
++                    "w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
++                    selectedFolderId === folder.id 
++                      ? "bg-nexus-primary text-nexus-primary-foreground" 
++                      : "text-nexus-sidebar-foreground hover:bg-nexus-border/50"
++                  )}
++                >
++                  <Icon className="w-4 h-4" />
++                  <span className="flex-1 text-left truncate">{displayName}</span>
++                  {folder.unread_count > 0 && (
++                    <Badge 
++                      data-testid={`badge-${folderKey}`}
++                      variant={selectedFolderId === folder.id ? "secondary" : "primary"}
++                      className="px-1.5 min-w-[1.25rem] justify-center"
++                    >
++                      {folder.unread_count}
++                    </Badge>
++                  )}
++                </button>
++              );
++            })
++          )}
+         </nav>
+       </div>
+     </aside>
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-04/before/EmailList.tsx	2026-04-27 11:40:25
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-04/after/EmailList.tsx	2026-04-27 11:42:11
+@@ -12,6 +12,8 @@
+   onEmailSelect: (email: Email) => void;
+   folderName: string;
+   isLoading: boolean;
++  isFolderLoading: boolean;
++  hasFolder: boolean;
+   searchQuery: string;
+   onSearchChange: (query: string) => void;
+   onDeleteEmails: (uids: string[]) => Promise<void>;
+@@ -132,12 +134,18 @@
+   onEmailSelect,
+   folderName,
+   isLoading,
++  isFolderLoading,
++  hasFolder,
+   searchQuery,
+   onSearchChange,
+   onDeleteEmails,
+   onLoadMore,
+ }) => {
+   const [selectedUids, setSelectedUids] = React.useState<Set<string>>(new Set());
++  const showFolderPrompt = !hasFolder && !isFolderLoading;
++  const showLoading = isLoading || isFolderLoading;
++  const showEmpty = !showLoading && hasFolder && emails.length === 0;
++  const loadingLabel = isFolderLoading && !hasFolder ? "Loading folders..." : "Loading emails...";
+ 
+   const toggleSelect = React.useCallback((uid: string, e: React.MouseEvent) => {
+     e.stopPropagation();
+@@ -237,13 +245,16 @@
+       </header>
+       
+       <div className="flex-1 overflow-hidden relative">
+-        {isLoading && emails.length === 0 && (
++        {showFolderPrompt && (
++          <div className="text-center py-10 text-nexus-muted text-sm">Select a folder to get started</div>
++        )}
++        {showLoading && (
+           <div className="absolute inset-0 z-10 flex items-center justify-center bg-nexus-background/50">
+-            <div className="text-nexus-muted text-sm">Loading emails...</div>
++            <div className="text-nexus-muted text-sm">{loadingLabel}</div>
+           </div>
+         )}
+-        {!isLoading && emails.length === 0 && (
+-          <div className="text-center py-10 text-nexus-muted text-sm">No emails found</div>
++        {showEmpty && (
++          <div className="text-center py-10 text-nexus-muted text-sm">No emails in this folder</div>
+         )}
+         
+         <Virtuoso
+--- docs/04-execution/05-frontend-mod-02/evidence/task-T-04/before/App.tsx	2026-04-27 11:40:25
++++ docs/04-execution/05-frontend-mod-02/evidence/task-T-04/after/App.tsx	2026-04-27 11:42:11
+@@ -22,6 +22,7 @@
+     selectedFolderId,
+     setSelectedFolderId,
+     loading: emailsLoading,
++    foldersLoading,
+     syncing,
+     sync,
+     fetchEmailDetails,
+@@ -109,6 +110,7 @@
+         selectedAccount={selectedAccount}
+         onAccountChange={setSelectedAccount}
+         folders={folders}
++        isFolderLoading={foldersLoading}
+         selectedFolderId={selectedFolderId}
+         onFolderSelect={setSelectedFolderId}
+         onSync={handleSync}
+@@ -130,6 +132,8 @@
+         }}
+         folderName={currentFolder?.name || "Inbox"}
+         isLoading={emailsLoading}
++        isFolderLoading={foldersLoading}
++        hasFolder={Boolean(selectedFolderId)}
+         searchQuery={searchQuery}
+         onSearchChange={setSearchQuery}
+         onDeleteEmails={async (uids) => {

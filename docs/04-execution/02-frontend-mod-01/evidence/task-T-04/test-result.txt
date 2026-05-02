@@ -1,0 +1,1 @@
+No component/unit tests available for account switching UX. Playwright account-related specs require updates planned in T-05; no task-specific tests run.

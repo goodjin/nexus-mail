@@ -1,0 +1,20 @@
+--- docs/04-execution/06-integration-mod-02/evidence/task-T-03/before/sync_folder_integration.spec.ts	2026-04-27 12:08:37
++++ docs/04-execution/06-integration-mod-02/evidence/task-T-03/after/sync_folder_integration.spec.ts	2026-04-27 12:09:11
+@@ -29,4 +29,17 @@
+     await expect(page.getByTestId('badge-inbox')).toHaveText('98');
+     await expect(page.getByTestId('email-card-100')).toContainText('Synced Mail');
+   });
++
++  test('should switch folders and refresh list context', async ({ page }) => {
++    await applyMockConfig(page, { folderSubjectMode: 'folder-key' });
++
++    await page.goto('/');
++    await page.waitForSelector('aside');
++
++    await expect(page.getByTestId('email-card-100')).toContainText('INBOX');
++
++    await page.getByTestId('folder-sent').click();
++    await expect(page.locator('h2')).toContainText('Sent');
++    await expect(page.getByTestId('email-card-100')).toContainText('SENT');
++  });
+ });

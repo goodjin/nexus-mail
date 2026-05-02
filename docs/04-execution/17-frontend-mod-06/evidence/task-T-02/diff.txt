@@ -1,0 +1,81 @@
+--- docs/04-execution/17-frontend-mod-06/evidence/task-T-02/before/useSettings.ts	2026-04-27 15:32:32
++++ docs/04-execution/17-frontend-mod-06/evidence/task-T-02/after/useSettings.ts	2026-04-27 15:32:39
+@@ -13,9 +13,18 @@
+   theme: 'system',
+ };
+ 
++let cachedSettings: AppSettings = DEFAULT_SETTINGS;
++let settingsLoaded = false;
++const settingsListeners = new Set<(settings: AppSettings) => void>();
++
++const notifySettings = (next: AppSettings) => {
++  cachedSettings = next;
++  settingsListeners.forEach(listener => listener(next));
++};
++
+ export function useSettings() {
+-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+-  const [loading, setLoading] = useState(true);
++  const [settings, setSettings] = useState<AppSettings>(cachedSettings);
++  const [loading, setLoading] = useState(!settingsLoaded);
+ 
+   const fetchSettings = useCallback(async () => {
+     try {
+@@ -32,7 +41,8 @@
+         theme: normalizedTheme,
+       };
+       
+-      setSettings(parsedSettings);
++      notifySettings(parsedSettings);
++      settingsLoaded = true;
+     } catch (error) {
+       console.error('Failed to fetch settings:', error);
+     } finally {
+@@ -41,13 +51,23 @@
+   }, []);
+ 
+   useEffect(() => {
+-    fetchSettings();
++    settingsListeners.add(setSettings);
++    return () => {
++      settingsListeners.delete(setSettings);
++    };
++  }, []);
++
++  useEffect(() => {
++    if (!settingsLoaded) {
++      fetchSettings();
++    }
+   }, [fetchSettings]);
+ 
+   const updateSetting = async <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+     try {
+       // Optimistic update
+-      setSettings(prev => ({ ...prev, [key]: value }));
++      const nextSettings = { ...cachedSettings, [key]: value } as AppSettings;
++      notifySettings(nextSettings);
+       const serializedValue = typeof value === 'boolean' ? value.toString() : value;
+       
+       await invoke('update_setting', { 
+@@ -61,5 +81,21 @@
+     }
+   };
+ 
++  useEffect(() => {
++    if (typeof window === 'undefined' || typeof document === 'undefined') return;
++    const media = window.matchMedia?.('(prefers-color-scheme: dark)');
++    const applyTheme = () => {
++      const prefersDark = media?.matches ?? false;
++      const shouldUseDark = settings.theme === 'dark' || (settings.theme === 'system' && prefersDark);
++      document.documentElement.classList.toggle('dark', shouldUseDark);
++    };
++    applyTheme();
++    if (settings.theme === 'system' && media) {
++      media.addEventListener('change', applyTheme);
++      return () => media.removeEventListener('change', applyTheme);
++    }
++    return undefined;
++  }, [settings.theme]);
++
+   return { settings, loading, updateSetting, refresh: fetchSettings };
+ }

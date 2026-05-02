@@ -1,0 +1,6 @@
+
+Running 2 tests using 2 workers
+
+[1A[2K[1/2] [chromium] › e2e/mail_detail.spec.ts:17:3 › Mail List Enhancements › should show unread indicator when scrolled to bottom
+[1A[2K[2/2] [chromium] › e2e/mail_detail.spec.ts:9:3 › Mail List Enhancements › should show list card metadata
+[1A[2K  2 passed (2.0s)

@@ -1,0 +1,30 @@
+# 集成测试执行报告 - MOD-06 体验增强与客户端设置
+
+## 执行概况
+
+- **计划**: `docs/03-dev-plan/18-integration-mod-06.md`
+- **执行范围**: T-01 ~ T-04
+- **状态**: ✅ 成功
+
+## 任务完成摘要
+
+| 任务 | 结果 | 关键产出 |
+| --- | --- | --- |
+| T-01 | ✅ | 新增系统主题跟随用例，验证深色/浅色切换 |
+| T-02 | ✅ | 补充同步快捷键用例，验证快捷键触发同步提示 |
+| T-03 | ✅ | 主题持久化用例 + mock settings 持久化支持 |
+| T-04 | ✅ | 归档报告与证据整理 |
+
+## 测试结果
+
+- `npx playwright test e2e/settings_shortcuts.spec.ts -g "theme"`
+- `npx playwright test e2e/settings_shortcuts.spec.ts -g "shortcut"`
+- `npx playwright test e2e/settings_shortcuts.spec.ts -g "persist"`
+- `npx playwright test e2e/settings_shortcuts.spec.ts`
+
+## 证据目录
+
+- `docs/04-execution/18-integration-mod-06/task-T-01`
+- `docs/04-execution/18-integration-mod-06/task-T-02`
+- `docs/04-execution/18-integration-mod-06/task-T-03`
+- `docs/04-execution/18-integration-mod-06/task-T-04`

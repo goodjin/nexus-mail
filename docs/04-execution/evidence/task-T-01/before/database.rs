@@ -1,0 +1,719 @@
+use super::traits::{AccountInfo, FolderInfo};
+use anyhow::{Context, Result};
+use sqlx::{sqlite::SqlitePool, Row};
+use std::path::Path;
+
+#[derive(Clone)]
+pub struct Database {
+    pub pool: SqlitePool,
+}
+
+impl Database {
+    pub async fn new(app_dir: &Path, key: &str) -> Result<Self> {
+        let db_path = app_dir.join("nexus.db");
+        println!("[DB] Attempting to connect to: {}", db_path.display());
+
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true);
+
+        let pool = SqlitePool::connect_with(options)
+            .await
+            .with_context(|| format!("Failed to connect to database at {}", db_path.display()))?;
+
+        println!("[DB] Connection established, setting PRAGMA key");
+        // 如果底层集成了 SQLCipher，PRAGMA key 会生效
+        sqlx::query(&format!("PRAGMA key = '{}'", key))
+            .execute(&pool)
+            .await
+            .context("Failed to set encryption key. Ensure SQLCipher is supported.")?;
+
+        let db = Self { pool };
+        db.init_tables().await?;
+        Ok(db)
+    }
+
+    pub async fn init_tables(&self) -> Result<()> {
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS accounts (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                display_name TEXT,
+                imap_host TEXT NOT NULL,
+                imap_port INTEGER NOT NULL,
+                imap_use_tls BOOLEAN NOT NULL DEFAULT 1,
+                smtp_host TEXT NOT NULL,
+                smtp_port INTEGER NOT NULL,
+                smtp_use_tls BOOLEAN NOT NULL DEFAULT 1
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 兼容性：如果旧表没有这些列，尝试添加
+        let _ = sqlx::query("ALTER TABLE accounts ADD COLUMN imap_use_tls BOOLEAN NOT NULL DEFAULT 1")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE accounts ADD COLUMN smtp_use_tls BOOLEAN NOT NULL DEFAULT 1")
+            .execute(&self.pool)
+            .await;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS folders (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                remote_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                unread_count INTEGER DEFAULT 0,
+                system_role TEXT,
+                UNIQUE(account_id, remote_id),
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 兼容性：如果旧表没有 system_role 列
+        let _ = sqlx::query("ALTER TABLE folders ADD COLUMN system_role TEXT")
+            .execute(&self.pool)
+            .await;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS emails (
+                id TEXT PRIMARY KEY,
+                folder_id TEXT NOT NULL,
+                remote_id TEXT NOT NULL,
+                subject TEXT,
+                sender TEXT,
+                date TEXT,
+                snippet TEXT,
+                flags TEXT DEFAULT '[]',
+                body_text TEXT,
+                body_html TEXT,
+                message_id TEXT,
+                UNIQUE(folder_id, remote_id),
+                FOREIGN KEY(folder_id) REFERENCES folders(id)
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 兼容性：如果旧表没有 flags 列
+        let _ = sqlx::query("ALTER TABLE emails ADD COLUMN flags TEXT DEFAULT '[]'")
+            .execute(&self.pool)
+            .await;
+
+        sqlx::query(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS emails_fts USING fts5(
+                id UNINDEXED,
+                subject,
+                sender,
+                snippet,
+                tokenize='unicode61'
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS attachments (
+                id TEXT PRIMARY KEY,
+                email_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                FOREIGN KEY(email_id) REFERENCES emails(id)
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn upsert_account(
+        &self,
+        email: &str,
+        display_name: Option<&str>,
+        imap_host: &str,
+        imap_port: u16,
+        imap_use_tls: bool,
+        smtp_host: &str,
+        smtp_port: u16,
+        smtp_use_tls: bool,
+    ) -> Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let returning_id: String = sqlx::query(
+            "INSERT INTO accounts (id, email, display_name, imap_host, imap_port, imap_use_tls, smtp_host, smtp_port, smtp_use_tls)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(email) DO UPDATE SET
+                display_name = excluded.display_name,
+                imap_host = excluded.imap_host,
+                imap_port = excluded.imap_port,
+                imap_use_tls = excluded.imap_use_tls,
+                smtp_host = excluded.smtp_host,
+                smtp_port = excluded.smtp_port,
+                smtp_use_tls = excluded.smtp_use_tls
+             RETURNING id"
+        )
+        .bind(&id)
+        .bind(email)
+        .bind(display_name)
+        .bind(imap_host)
+        .bind(imap_port as i64)
+        .bind(imap_use_tls)
+        .bind(smtp_host)
+        .bind(smtp_port as i64)
+        .bind(smtp_use_tls)
+        .fetch_one(&self.pool)
+        .await
+        .map(|row| row.get::<String, _>(0))
+        .context("Failed to upsert account")?;
+
+        self.ensure_default_folders(&returning_id).await?;
+        
+        Ok(returning_id)
+    }
+
+    async fn ensure_default_folders(&self, account_id: &str) -> Result<()> {
+        let defaults = [
+            ("INBOX", "Inbox", "INBOX"),
+            ("SENT", "Sent", "SENT"),
+            ("DRAFTS", "Drafts", "DRAFTS"),
+            ("SPAM", "Spam", "SPAM"),
+            ("TRASH", "Trash", "TRASH"),
+        ];
+
+        for (remote_id, name, role) in defaults.iter() {
+            let id = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT OR IGNORE INTO folders (id, account_id, remote_id, name, unread_count, system_role) 
+                 VALUES (?, ?, ?, ?, 0, ?)",
+            )
+            .bind(&id)
+            .bind(account_id)
+            .bind(remote_id)
+            .bind(name)
+            .bind(role)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn upsert_folder(
+        &self,
+        account_id: &str,
+        remote_id: &str,
+        name: &str,
+        unread_count: u32,
+        system_role: Option<&str>,
+    ) -> Result<String> {
+        let existing = sqlx::query("SELECT id FROM folders WHERE account_id = ? AND remote_id = ?")
+            .bind(account_id)
+            .bind(remote_id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        if let Some(row) = existing {
+            let id: String = row.get(0);
+            sqlx::query("UPDATE folders SET name = ?, unread_count = ?, system_role = ? WHERE id = ?")
+                .bind(name)
+                .bind(unread_count as i64)
+                .bind(system_role)
+                .bind(&id)
+                .execute(&self.pool)
+                .await?;
+            Ok(id)
+        } else {
+            let id = uuid::Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO folders (id, account_id, remote_id, name, unread_count, system_role) 
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(account_id)
+            .bind(remote_id)
+            .bind(name)
+            .bind(unread_count as i64)
+            .bind(system_role)
+            .execute(&self.pool)
+            .await?;
+            Ok(id)
+        }
+    }
+
+    pub async fn delete_folder(&self, folder_id: &str) -> Result<()> {
+        // Cascade delete emails (which might cascade to attachments naturally or we need to delete them)
+        // Wait, SQLite PRAGMA foreign_keys is likely enabled, but to be safe we explicitly delete.
+        sqlx::query("DELETE FROM emails WHERE folder_id = ?")
+            .bind(folder_id)
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("DELETE FROM folders WHERE id = ?")
+            .bind(folder_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn find_email_by_message_id(&self, folder_id: &str, message_id: &str) -> Result<Option<String>> {
+        let res: Option<(String,)> = sqlx::query_as(
+            "SELECT remote_id FROM emails WHERE folder_id = ? AND message_id = ?"
+        )
+        .bind(folder_id)
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(res.map(|r| r.0))
+    }
+
+    pub async fn update_remote_id(&self, folder_id: &str, old_remote_id: &str, new_remote_id: &str) -> Result<()> {
+        sqlx::query("UPDATE emails SET remote_id = ? WHERE folder_id = ? AND remote_id = ?")
+            .bind(new_remote_id)
+            .bind(folder_id)
+            .bind(old_remote_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_email(
+        &self,
+        folder_id: &str,
+        summary: &super::traits::EmailSummary,
+    ) -> Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut tx = self.pool.begin().await?;
+
+        let flags_json = serde_json::to_string(&summary.flags).unwrap_or_else(|_| "[]".to_string());
+        let email_id: String = sqlx::query(
+            "INSERT INTO emails (id, folder_id, remote_id, subject, sender, date, snippet, flags, message_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(folder_id, remote_id) DO UPDATE SET
+                subject = excluded.subject,
+                sender = excluded.sender,
+                date = excluded.date,
+                snippet = excluded.snippet,
+                flags = excluded.flags,
+                message_id = excluded.message_id
+             RETURNING id",
+        )
+        .bind(&id)
+        .bind(folder_id)
+        .bind(&summary.uid)
+        .bind(&summary.subject)
+        .bind(&summary.from)
+        .bind(&summary.date)
+        .bind(&summary.snippet)
+        .bind(flags_json)
+        .bind(&summary.message_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map(|row| row.get::<String, _>(0))?;
+
+        sqlx::query("DELETE FROM emails_fts WHERE id = ?")
+            .bind(&email_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO emails_fts (id, subject, sender, snippet) VALUES (?, ?, ?, ?)")
+            .bind(&email_id)
+            .bind(&summary.subject)
+            .bind(&summary.from)
+            .bind(&summary.snippet)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(email_id)
+    }
+
+    pub async fn search_emails(&self, query: &str) -> Result<Vec<String>> {
+        let fts_query = query
+            .split_whitespace()
+            .map(|word| {
+                let safe_word = word.replace('\'', "''").replace('"', "");
+                format!("\"{}\"*", safe_word)
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        let fts_query = if fts_query.is_empty() {
+            String::from("*")
+        } else {
+            fts_query
+        };
+
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT id FROM emails_fts WHERE emails_fts MATCH ? ORDER BY rank")
+                .bind(fts_query)
+                .fetch_all(&self.pool)
+                .await?;
+
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    pub async fn get_last_uid(&self, folder_id: &str) -> Result<u32> {
+        let res: Option<(i64,)> = sqlx::query_as(
+            "SELECT MAX(CAST(remote_id AS INTEGER)) FROM emails WHERE folder_id = ?",
+        )
+        .bind(folder_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(res.map(|(uid,)| uid as u32).unwrap_or(0))
+    }
+
+    pub async fn get_first_uid(&self, folder_id: &str) -> Result<u32> {
+        let res: Option<(i64,)> = sqlx::query_as(
+            "SELECT MIN(CAST(remote_id AS INTEGER)) FROM emails WHERE folder_id = ?",
+        )
+        .bind(folder_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(res.map(|(uid,)| uid as u32).unwrap_or(0))
+    }
+
+    pub async fn get_account_by_email(&self, email: &str) -> Result<Option<AccountInfo>> {
+        let row: Option<(String, String, Option<String>, String, i64, bool, String, i64, bool)> = sqlx::query_as(
+            "SELECT id, email, display_name, imap_host, imap_port, imap_use_tls, smtp_host, smtp_port, smtp_use_tls FROM accounts WHERE email = ?"
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| AccountInfo {
+            id: r.0,
+            email: r.1,
+            display_name: r.2,
+            imap_host: r.3,
+            imap_port: r.4,
+            imap_use_tls: r.5,
+            smtp_host: r.6,
+            smtp_port: r.7,
+            smtp_use_tls: r.8,
+        }))
+    }
+
+    pub async fn get_folders_for_account(&self, account_id: &str) -> Result<Vec<FolderInfo>> {
+        let rows = sqlx::query("SELECT id, name, remote_id, unread_count, system_role FROM folders WHERE account_id = ?")
+            .bind(account_id)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut folders = Vec::new();
+        for row in rows {
+            folders.push(FolderInfo {
+                id: row.get(0),
+                name: row.get(1),
+                remote_id: row.get(2),
+                unread_count: row.get::<i64, _>(3) as u32,
+                system_role: row.get(4),
+            });
+        }
+        Ok(folders)
+    }
+
+    pub async fn update_folder_unread_count(&self, folder_id: &str) -> Result<()> {
+        // 计算未读邮件数：flags JSON 字符串中不包含 \Seen 标记
+        // 此处使用简单的 LIKE 匹配，虽然不够精确但效率较高
+        let unread: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM emails WHERE folder_id = ? AND (flags NOT LIKE '%\\Seen%')"
+        )
+        .bind(folder_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        sqlx::query("UPDATE folders SET unread_count = ? WHERE id = ?")
+            .bind(unread.0)
+            .bind(folder_id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_all_uids_in_folder(&self, folder_id: &str) -> Result<Vec<String>> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT remote_id FROM emails WHERE folder_id = ?")
+            .bind(folder_id)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    pub async fn delete_email_by_uid(&self, folder_id: &str, uid: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        // 查找内部 ID 以便清理 FTS
+        let email_id: Option<(String,)> = sqlx::query_as("SELECT id FROM emails WHERE folder_id = ? AND remote_id = ?")
+            .bind(folder_id)
+            .bind(uid)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+        if let Some((id,)) = email_id {
+            sqlx::query("DELETE FROM emails_fts WHERE id = ?").bind(&id).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM attachments WHERE email_id = ?").bind(&id).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM emails WHERE id = ?").bind(&id).execute(&mut *tx).await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+
+
+    pub async fn delete_all_folders_for_account(&self, account_id: &str) -> Result<()> {
+        // First delete all emails in those folders
+        sqlx::query("DELETE FROM emails WHERE folder_id IN (SELECT id FROM folders WHERE account_id = ?)")
+            .bind(account_id)
+            .execute(&self.pool)
+            .await?;
+        // Then delete the folders
+        sqlx::query("DELETE FROM folders WHERE account_id = ?")
+            .bind(account_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn has_any_system_roles(&self, account_id: &str) -> Result<bool> {
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM folders WHERE account_id = ? AND system_role IS NOT NULL")
+            .bind(account_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count.0 > 0)
+    }
+
+    pub async fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        let res: Option<(String,)> = sqlx::query_as("SELECT value FROM settings WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(res.map(|(v,)| v))
+    }
+
+    pub async fn get_accounts_detailed(&self) -> Result<Vec<AccountInfo>> {
+        let rows: Vec<(String, String, Option<String>, String, i64, bool, String, i64, bool)> = sqlx::query_as(
+            "SELECT id, email, display_name, imap_host, imap_port, imap_use_tls, smtp_host, smtp_port, smtp_use_tls FROM accounts"
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| AccountInfo {
+            id: r.0,
+            email: r.1,
+            display_name: r.2,
+            imap_host: r.3,
+            imap_port: r.4,
+            imap_use_tls: r.5,
+            smtp_host: r.6,
+            smtp_port: r.7,
+            smtp_use_tls: r.8,
+        }).collect())
+    }
+
+    pub async fn get_all_settings(&self) -> Result<std::collections::HashMap<String, String>> {
+        let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM settings")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    pub async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+            .bind(key)
+            .bind(value)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_db_initialization() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        // 内存数据库通常不支持 SQLCipher，除非特殊编译。此处仅测试逻辑。
+        let db = Database { pool };
+        db.init_tables().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_upsert_logic() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let db = Database { pool };
+        db.init_tables().await.unwrap();
+
+        let acct_id = db
+            .upsert_account("test@test.com", None, "host", 993, true, "host", 465, true)
+            .await
+            .unwrap();
+        assert!(!acct_id.is_empty());
+
+        let folder_id = db
+            .upsert_folder(&acct_id, "INBOX", "Inbox", 10)
+            .await
+            .unwrap();
+        assert!(!folder_id.is_empty());
+
+        // 测试更新
+        let folder_id_2 = db
+            .upsert_folder(&acct_id, "INBOX", "Updated Inbox", 12)
+            .await
+            .unwrap();
+        assert_eq!(folder_id, folder_id_2);
+    }
+
+    #[tokio::test]
+    async fn test_fts_search() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let db = Database { pool };
+        db.init_tables().await.unwrap();
+
+        let acct_id = db
+            .upsert_account("search@test.com", None, "host", 993, true, "host", 465, true)
+            .await
+            .unwrap();
+        let folder_id = db
+            .upsert_folder(&acct_id, "INBOX", "Inbox", 0)
+            .await
+            .unwrap();
+
+        let email = crate::core::traits::EmailSummary {
+            uid: "100".into(),
+            subject: "Rust Programming Language".into(),
+            from: "rust@rust-lang.org".into(),
+            date: "2026-01-01".into(),
+            snippet: "This is a book about Rust.".into(),
+            flags: vec!["\\Seen".to_string()],
+        };
+        db.upsert_email(&folder_id, &email).await.unwrap();
+
+        let results = db.search_emails("Rust").await.unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results_none = db.search_emails("Java").await.unwrap();
+        assert_eq!(results_none.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_multi_account_isolation() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let db = Database { pool };
+        db.init_tables().await.unwrap();
+
+        let acct1 = db
+            .upsert_account("user1@test.com", None, "host", 993, true, "host", 465, true)
+            .await
+            .unwrap();
+        let acct2 = db
+            .upsert_account("user2@test.com", None, "host", 993, true, "host", 465, true)
+            .await
+            .unwrap();
+
+        let folder1 = db.upsert_folder(&acct1, "INBOX", "Inbox", 0).await.unwrap();
+        let folder2 = db.upsert_folder(&acct2, "INBOX", "Inbox", 0).await.unwrap();
+
+        assert_ne!(folder1, folder2);
+
+        let email1 = crate::core::traits::EmailSummary {
+            uid: "1".into(),
+            subject: "Msg 1".into(),
+            from: "a@a.com".into(),
+            date: "now".into(),
+            snippet: "s1".into(),
+            flags: vec![],
+        };
+        db.upsert_email(&folder1, &email1).await.unwrap();
+
+        let email2 = crate::core::traits::EmailSummary {
+            uid: "1".into(), // Same UID but in different folder/account
+            subject: "Msg 2".into(),
+            from: "b@b.com".into(),
+            date: "now".into(),
+            snippet: "s2".into(),
+            flags: vec![],
+        };
+        db.upsert_email(&folder2, &email2).await.unwrap();
+
+        // 验证同步引擎获取到的 UID 是隔离s的
+        assert_eq!(db.get_last_uid(&folder1).await.unwrap(), 1);
+        assert_eq!(db.get_last_uid(&folder2).await.unwrap(), 1);
+
+        // 验证全文搜索结果包含两条记录
+        let search_results = db.search_emails("Msg").await.unwrap();
+        assert_eq!(search_results.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_unread_count_calculation() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let db = Database { pool };
+        db.init_tables().await.unwrap();
+
+        let acct_id = db.upsert_account("count@test.com", None, "h", 993, true, "h", 465, true).await.unwrap();
+        let folder_id = db.upsert_folder(&acct_id, "INBOX", "Inbox", 0).await.unwrap();
+
+        // 1. 插入一封未读邮件
+        let email1 = crate::core::traits::EmailSummary {
+            uid: "1".into(),
+            subject: "Unread".into(),
+            from: "u@u.com".into(),
+            date: "now".into(),
+            snippet: "s1".into(),
+            flags: vec!["\\Draft".to_string()], // 没有 \Seen
+        };
+        db.upsert_email(&folder_id, &email1).await.unwrap();
+        db.update_folder_unread_count(&folder_id).await.unwrap();
+        
+        let folders = db.get_folders_by_account(&acct_id).await.unwrap();
+        assert_eq!(folders[0].unread_count, 1);
+
+        // 2. 插入一封已读邮件
+        let email2 = crate::core::traits::EmailSummary {
+            uid: "2".into(),
+            subject: "Read".into(),
+            from: "r@r.com".into(),
+            date: "now".into(),
+            snippet: "s2".into(),
+            flags: vec!["\\Seen".to_string()],
+        };
+        db.upsert_email(&folder_id, &email2).await.unwrap();
+        db.update_folder_unread_count(&folder_id).await.unwrap();
+
+        let folders = db.get_folders_by_account(&acct_id).await.unwrap();
+        assert_eq!(folders[0].unread_count, 1); // 依然是 1
+
+        // 3. 更新第一封邮件为已读
+        let email1_read = crate::core::traits::EmailSummary {
+            uid: "1".into(),
+            subject: "Unread".into(),
+            from: "u@u.com".into(),
+            date: "now".into(),
+            snippet: "s1".into(),
+            flags: vec!["\\Seen".to_string(), "\\Answered".to_string()],
+        };
+        db.upsert_email(&folder_id, &email1_read).await.unwrap();
+        db.update_folder_unread_count(&folder_id).await.unwrap();
+
+        let folders = db.get_folders_by_account(&acct_id).await.unwrap();
+        assert_eq!(folders[0].unread_count, 0);
+    }
+}

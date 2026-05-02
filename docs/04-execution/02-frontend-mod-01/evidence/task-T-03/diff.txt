@@ -1,0 +1,325 @@
+diff --git a/src/components/settings/SettingsModal.tsx b/src/components/settings/SettingsModal.tsx
+index 4829d1d..e7a1cfc 100644
+--- a/src/components/settings/SettingsModal.tsx
++++ b/src/components/settings/SettingsModal.tsx
+@@ -18,7 +18,7 @@ type TabType = 'general' | 'accounts';
+ 
+ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab = 'general', initialAction }) => {
+   const { settings, updateSetting } = useSettings();
+-  const { accounts, updateAccount, updatePassword } = useAccountContext();
++  const { accounts, updateAccount, updatePassword, discoverAccountSettings } = useAccountContext();
+   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+   
+@@ -26,8 +26,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+   const [editForm, setEditForm] = useState<AccountInfo | null>(null);
+   const [newPassword, setNewPassword] = useState('');
+   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
++  const [saveError, setSaveError] = useState<string | null>(null);
+   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+   const [testError, setTestError] = useState<string | null>(null);
++  const [discoveryStatus, setDiscoveryStatus] = useState<'idle' | 'discovering' | 'success' | 'error'>('idle');
++  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
++  const [authMethod, setAuthMethod] = useState<'password' | 'oauth'>('password');
+ 
+   const selectedAccount = accounts.find(a => a.id === selectedAccountId);
+ 
+@@ -35,6 +39,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+     if (selectedAccount) {
+       setEditForm({ ...selectedAccount });
+       setNewPassword('');
++      setAuthMethod('password');
+     }
+   }, [selectedAccountId, selectedAccount]);
+ 
+@@ -55,32 +60,69 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+             smtp_use_tls: true
+         });
+         setNewPassword('');
++        setAuthMethod('password');
+       } else {
+         setSelectedAccountId(null);
+         setEditForm(null);
++        setAuthMethod('password');
+       }
+     }
+   }, [isOpen, initialTab, initialAction]);
+ 
+   if (!isOpen) return null;
+ 
++  const isNewAccount = selectedAccountId === 'new';
++  const isPasswordAuth = authMethod === 'password';
++  const hasImapPort = Number.isFinite(editForm?.imap_port);
++  const hasSmtpPort = Number.isFinite(editForm?.smtp_port);
++  const requiredFieldsMissing = !editForm?.email?.trim()
++    || !editForm?.imap_host?.trim()
++    || !editForm?.smtp_host?.trim()
++    || !hasImapPort
++    || !hasSmtpPort
++    || (isNewAccount && isPasswordAuth && !newPassword);
++  const isSaveDisabled = saveStatus === 'saving' || requiredFieldsMissing;
++  const isTestDisabled = testStatus === 'testing' || requiredFieldsMissing;
++
++  const formatAccountError = (error: unknown) => {
++    const message = error instanceof Error ? error.message : String(error);
++    const normalized = message.toLowerCase();
++    if (normalized.includes('invalid password') || normalized.includes('auth')) {
++      return '认证失败，请检查密码或授权方式。';
++    }
++    if (normalized.includes('timeout') || normalized.includes('timed out')) {
++      return '连接超时，请确认网络和服务器地址。';
++    }
++    if (normalized.includes('network')) {
++      return '网络异常，请检查网络连接。';
++    }
++    if (normalized.includes('connection') || normalized.includes('connect')) {
++      return '连接失败，请确认服务器地址、端口和协议配置。';
++    }
++    return message || '发生未知错误，请稍后重试。';
++  };
++
+   const handleSaveAccount = async () => {
+-    if (!editForm) return;
++    if (!editForm || isSaveDisabled) return;
+     try {
+       setSaveStatus('saving');
++      setSaveError(null);
+       await updateAccount(editForm);
+       if (newPassword) {
+         await updatePassword(editForm.email, newPassword);
+       }
+       setSaveStatus('success');
++      setSaveError(null);
+       setTimeout(() => setSaveStatus('idle'), 2000);
+     } catch (e) {
++      console.error('Failed to save account:', e);
+       setSaveStatus('error');
++      setSaveError(formatAccountError(e));
+     }
+   };
+ 
+   const handleTestConnection = async () => {
+-    if (!editForm) return;
++    if (!editForm || isTestDisabled) return;
+     try {
+       setTestStatus('testing');
+       setTestError(null);
+@@ -95,10 +137,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+         password: newPassword || null,
+       });
+       setTestStatus('success');
++      setTestError(null);
+       setTimeout(() => setTestStatus('idle'), 3000);
+     } catch (e: any) {
++      console.error('Failed to test connection:', e);
+       setTestStatus('error');
+-      setTestError(e.toString());
++      setTestError(formatAccountError(e));
++    }
++  };
++
++  const handleAutoDiscover = async () => {
++    if (!editForm?.email) return;
++    try {
++      setDiscoveryStatus('discovering');
++      setDiscoveryError(null);
++      const result = await discoverAccountSettings(editForm.email);
++      const hasResult = Boolean(
++        result
++        && (result.imap_host || result.smtp_host || result.imap_port || result.smtp_port)
++      );
++      if (!hasResult) {
++        throw new Error('未找到可用配置，请手动填写。');
++      }
++      setEditForm((current) => current ? ({
++        ...current,
++        imap_host: result?.imap_host ?? current.imap_host,
++        imap_port: result?.imap_port ?? current.imap_port,
++        imap_use_tls: result?.imap_use_tls ?? current.imap_use_tls,
++        smtp_host: result?.smtp_host ?? current.smtp_host,
++        smtp_port: result?.smtp_port ?? current.smtp_port,
++        smtp_use_tls: result?.smtp_use_tls ?? current.smtp_use_tls,
++      }) : current);
++      setDiscoveryStatus('success');
++      setTimeout(() => setDiscoveryStatus('idle'), 3000);
++    } catch (error) {
++      setDiscoveryStatus('error');
++      setDiscoveryError(formatAccountError(error));
+     }
+   };
+ 
+@@ -306,6 +380,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                               className="w-full bg-transparent border p-2 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none" 
+                             />
+                           </div>
++                          <div className="space-y-1 col-span-2">
++                            <label className="text-xs font-semibold text-nexus-muted uppercase tracking-wider">Auth Method</label>
++                            <select
++                              value={authMethod}
++                              onChange={e => setAuthMethod(e.target.value as 'password' | 'oauth')}
++                              className="w-full bg-transparent border p-2 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none"
++                            >
++                              <option value="password">Password</option>
++                              <option value="oauth">OAuth2 (Coming Soon)</option>
++                            </select>
++                            <p className="text-[11px] text-nexus-muted">
++                              {authMethod === 'oauth'
++                                ? 'OAuth2 flow will be available once discovery is enabled.'
++                                : 'Use a dedicated app password if required by your provider.'}
++                            </p>
++                          </div>
+                         </div>
+ 
+                         <div className="space-y-1">
+@@ -317,7 +407,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                               placeholder="Leave blank to keep current"
+                               value={newPassword}
+                               onChange={e => setNewPassword(e.target.value)}
+-                              className="w-full bg-transparent border p-2 pl-10 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none" 
++                              disabled={!isPasswordAuth}
++                              className={cn(
++                                "w-full bg-transparent border p-2 pl-10 rounded-lg text-sm focus:ring-2 ring-nexus-accent outline-none",
++                                !isPasswordAuth && "opacity-60 cursor-not-allowed"
++                              )}
+                             />
+                           </div>
+                         </div>
+@@ -325,10 +419,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                     </div>
+ 
+                     <div className="space-y-4">
+-                      <h4 className="text-sm font-bold flex items-center gap-2">
+-                        <Server className="w-4 h-4 text-nexus-accent" />
+-                        Server Configuration
+-                      </h4>
++                      <div className="flex items-center justify-between gap-3">
++                        <h4 className="text-sm font-bold flex items-center gap-2">
++                          <Server className="w-4 h-4 text-nexus-accent" />
++                          Server Configuration
++                        </h4>
++                        <Button
++                          variant="ghost"
++                          size="sm"
++                          onClick={handleAutoDiscover}
++                          disabled={!editForm?.email || discoveryStatus === 'discovering'}
++                          className="px-3 text-xs border border-nexus-muted/20"
++                        >
++                          {discoveryStatus === 'discovering' ? (
++                            <span className="flex items-center gap-2">
++                              <Loader2 className="w-3 h-3 animate-spin" />
++                              Detecting...
++                            </span>
++                          ) : 'Auto-Discover'}
++                        </Button>
++                      </div>
++                      {discoveryStatus === 'success' && (
++                        <div className="text-xs text-green-600 flex items-center gap-2">
++                          <CheckCircle2 className="w-3.5 h-3.5" />
++                          Auto-discovery applied. Review and save the settings.
++                        </div>
++                      )}
++                      {discoveryStatus === 'error' && discoveryError && (
++                        <div className="text-xs text-red-600 flex items-center gap-2">
++                          <AlertCircle className="w-3.5 h-3.5" />
++                          {discoveryError}
++                        </div>
++                      )}
+                       
+                       <div className="grid grid-cols-3 gap-4 p-4 bg-nexus-muted/10 rounded-xl border">
+                         <div className="col-span-2 space-y-1">
+@@ -393,7 +515,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                         <Button 
+                           variant="primary" 
+                           onClick={handleSaveAccount}
+-                          disabled={saveStatus === 'saving' || !editForm.email || (selectedAccountId === 'new' && !newPassword)}
++                          disabled={isSaveDisabled}
+                           className={cn("px-8", saveStatus === 'success' && "bg-green-600 hover:bg-green-700")}
+                         >
+                           {saveStatus === 'saving' 
+@@ -406,7 +528,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                         <Button
+                           variant="ghost"
+                           onClick={handleTestConnection}
+-                          disabled={testStatus === 'testing' || !editForm.email || (selectedAccountId === 'new' && !newPassword)}
++                          disabled={isTestDisabled}
+                           className={cn(
+                             "px-4 border border-nexus-muted/20 hover:bg-nexus-muted/5 flex items-center gap-2",
+                             testStatus === 'success' && "text-green-600 border-green-200 bg-green-50",
+@@ -425,7 +547,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
+                           {testStatus === 'testing' ? 'Testing...' : testStatus === 'success' ? 'Connection OK' : 'Test Connection'}
+                         </Button>
+ 
+-                        {saveStatus === 'error' && <span className="text-xs text-red-500 font-medium">Failed to save. Check your input.</span>}
++                        {saveStatus === 'error' && saveError && (
++                          <div className="w-full mt-2 p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 animate-in fade-in slide-in-from-top-1">
++                            <strong>Save Failed:</strong> {saveError}
++                          </div>
++                        )}
++                        {saveStatus === 'success' && (
++                          <span className="text-xs text-green-600 font-medium">Saved successfully.</span>
++                        )}
++                        {requiredFieldsMissing && (
++                          <span className="text-xs text-nexus-muted font-medium">
++                            Fill in required email and server settings to continue.
++                          </span>
++                        )}
++                        {testStatus === 'success' && (
++                          <span className="text-xs text-green-600 font-medium">Connection successful.</span>
++                        )}
+                         {testStatus === 'error' && testError && (
+                           <div className="w-full mt-2 p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 animate-in fade-in slide-in-from-top-1">
+                             <strong>Test Failed:</strong> {testError}
+diff --git a/src/context/AccountContext.tsx b/src/context/AccountContext.tsx
+index 7e75380..7871507 100644
+--- a/src/context/AccountContext.tsx
++++ b/src/context/AccountContext.tsx
+@@ -14,6 +14,15 @@ export interface AccountInfo {
+   smtp_use_tls: boolean;
+ }
+ 
++export interface AccountDiscoveryResult {
++  imap_host?: string;
++  imap_port?: number;
++  imap_use_tls?: boolean;
++  smtp_host?: string;
++  smtp_port?: number;
++  smtp_use_tls?: boolean;
++}
++
+ interface AccountContextType {
+   accounts: AccountInfo[];
+   selectedAccount: string | null;
+@@ -22,6 +31,7 @@ interface AccountContextType {
+   refreshAccounts: () => Promise<void>;
+   updateAccount: (details: AccountInfo) => Promise<void>;
+   updatePassword: (email: string, pass: string) => Promise<void>;
++  discoverAccountSettings: (email: string) => Promise<AccountDiscoveryResult | null>;
+ }
+ 
+ const AccountContext = createContext<AccountContextType | undefined>(undefined);
+@@ -68,6 +78,15 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
+     await invoke('update_account_password', { email, password });
+   };
+ 
++  const discoverAccountSettings = async (email: string) => {
++    try {
++      return await invoke('discover_account_settings', { email }) as AccountDiscoveryResult;
++    } catch (error) {
++      console.error('Failed to discover account settings:', error);
++      throw error;
++    }
++  };
++
+   return (
+     <AccountContext.Provider value={{ 
+       accounts, 
+@@ -76,7 +95,8 @@ export const AccountProvider: React.FC<{ children: ReactNode }> = ({ children })
+       loading, 
+       refreshAccounts: fetchAccounts,
+       updateAccount,
+-      updatePassword
++      updatePassword,
++      discoverAccountSettings
+     }}>
+       {children}
+     </AccountContext.Provider>

@@ -1,48 +1,98 @@
-
 import { test, expect } from '@playwright/test';
 
-test.describe('Account and Data Persistence', () => {
-  test('should show multiple accounts and persist emails after refresh', async ({ page }) => {
-    // 1. Navigate to app
-    await page.goto('http://localhost:1420');
-    
-    // 2. Wait for initial seed data
-    await page.waitForSelector('[data-testid^="folder-"]');
-    
-    // 3. Open Settings and Add a new account
-    await page.click('[data-testid="settings-button"]');
-    await page.click('button:has-text("Accounts")');
-    await page.click('button:has-text("Add New Account")');
-    
+const openAccountsTab = async (page) => {
+  await page.goto('/');
+  await page.locator('button[title="Settings"]').click();
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  await page.getByRole('button', { name: 'Accounts' }).click();
+};
+
+const openAddAccount = async (page) => {
+  await openAccountsTab(page);
+  await page.getByRole('button', { name: 'Add New Account' }).click();
+};
+
+const fillAccountForm = async (page, email: string, displayName: string, password: string) => {
+  await page.locator('input[type="email"]').fill(email);
+  await page.locator('label:has-text("Display Name")').locator('..').locator('input').fill(displayName);
+  await page.locator('input[placeholder="Leave blank to keep current"]').fill(password);
+};
+
+test.describe('Account Access & Switching', () => {
+  test('should prevent creation when password is missing', async ({ page }) => {
+    await openAddAccount(page);
+    const email = `nopass-${Date.now()}@test.com`;
+    await page.locator('input[type="email"]').fill(email);
+    await page.locator('label:has-text("Display Name")').locator('..').locator('input').fill('No Pass');
+    const createButton = page.getByRole('button', { name: 'Create Account' });
+    await expect(createButton).toBeDisabled();
+    await expect(page.getByText('Fill in required email and server settings to continue.')).toBeVisible();
+    await expect(page.locator(`[data-testid="account-item-${email}"]`)).toHaveCount(0);
+  });
+
+  test('should create account and show success state', async ({ page }) => {
+    await openAddAccount(page);
     const newEmail = `test-${Date.now()}@test.com`;
-    await page.fill('input[type="email"]', newEmail);
-    // Fill display name
-    await page.fill('input[value="New Account"]', 'Test Account'); 
-    await page.fill('input[placeholder="Leave blank to keep current"]', 'password');
-    await page.click('button:has-text("Create Account")');
-    
-    // Verify it appears in settings modal list
-    await expect(page.locator(`[data-testid="account-item-${newEmail}"]`)).toBeVisible();
-    
-    // 4. Close settings and check Sidebar Account Bar
-    await page.click('button:has-text("Done")');
-    
-    // Check for the account circle (initials should be TE from Test Account or the email)
+    await fillAccountForm(page, newEmail, 'Test Account', 'password');
+    await page.getByRole('button', { name: 'Create Account' }).click();
+    await expect(page.getByText('Saved successfully.')).toBeVisible();
+    await expect(page.getByTestId(`account-item-${newEmail}`)).toBeVisible();
+    await page.getByRole('button', { name: 'Close' }).click();
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeHidden();
+
+    const newAccountButton = page.locator(`button[title="${newEmail}"]`);
+    await expect(newAccountButton).toBeVisible();
+    await newAccountButton.click();
+    await expect(newAccountButton).toHaveClass(/ring-nexus-accent/);
+
+    await page.reload();
+    await page.waitForSelector('aside');
     await expect(page.locator(`button[title="${newEmail}"]`)).toBeVisible();
-    
-    // 5. Test Persistence (Refresh)
-    // Click the first account circle (Demo) to ensure we're on the right one
-    await page.click('button[title="demo@nexus-mail.com"]');
-    await page.waitForTimeout(1000); 
-    
-    const initialEmailCount = await page.locator('.email-item').count();
-    expect(initialEmailCount).toBeGreaterThan(0);
-    
-    // Click Refresh
-    await page.click('button:has-text("Refresh")');
-    await page.waitForTimeout(3000); // Wait for sync
-    
-    const postRefreshCount = await page.locator('.email-item').count();
-    expect(postRefreshCount).toBeGreaterThan(0); 
+  });
+
+  test('should show IMAP auth failure feedback', async ({ page }) => {
+    await openAddAccount(page);
+    const email = `fail-${Date.now()}@test.com`;
+    await fillAccountForm(page, email, 'Fail Account', 'error');
+    await page.getByRole('button', { name: 'Test Connection' }).click();
+    await expect(page.getByText('认证失败')).toBeVisible();
+    await expect(page.locator(`[data-testid="account-item-${email}"]`)).toHaveCount(0);
+  });
+
+  test('should show SMTP connection failure feedback', async ({ page }) => {
+    await openAddAccount(page);
+    const email = `smtp-fail-${Date.now()}@test.com`;
+    await fillAccountForm(page, email, 'SMTP Fail', 'password');
+    await page.locator('label:has-text("SMTP Host")').locator('..').locator('input').fill('smtp-fail.test');
+    await page.getByRole('button', { name: 'Test Connection' }).click();
+    await expect(page.getByText('连接失败')).toBeVisible();
+    await expect(page.locator(`[data-testid="account-item-${email}"]`)).toHaveCount(0);
+  });
+
+  test('should switch accounts from the sidebar', async ({ page }) => {
+    await openAddAccount(page);
+    const newEmail = `switch-${Date.now()}@test.com`;
+    await fillAccountForm(page, newEmail, 'Switch Account', 'password');
+    await page.getByRole('button', { name: 'Create Account' }).click();
+    await expect(page.getByTestId(`account-item-${newEmail}`)).toBeVisible();
+    await page.getByRole('button', { name: 'Close' }).click();
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeHidden();
+
+    const inboxBadge = page.getByTestId('badge-inbox');
+    await expect(inboxBadge).toHaveText('95');
+    await page.getByTestId('folder-sent').click();
+    await expect(page.locator('h2')).toContainText('Sent');
+
+    const newAccountButton = page.locator(`button[title="${newEmail}"]`);
+    await expect(newAccountButton).toBeVisible();
+    await newAccountButton.click();
+    await expect(newAccountButton).toHaveClass(/ring-nexus-accent/);
+    await expect(inboxBadge).toHaveText('12');
+    await expect(page.locator('h2')).toContainText('Inbox');
+
+    const demoAccountButton = page.locator('button[title="demo@nexus-mail.com"]');
+    await demoAccountButton.click();
+    await expect(demoAccountButton).toHaveClass(/ring-nexus-accent/);
+    await expect(inboxBadge).toHaveText('95');
   });
 });

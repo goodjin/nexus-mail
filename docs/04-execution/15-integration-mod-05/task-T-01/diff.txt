@@ -1,0 +1,51 @@
+--- docs/04-execution/15-integration-mod-05/task-T-01/before/search.spec.ts	2026-04-27 14:19:59
++++ docs/04-execution/15-integration-mod-05/task-T-01/after/search.spec.ts	2026-04-27 14:20:53
+@@ -6,6 +6,26 @@
+     await expect(page.getByTestId('search-input')).toBeVisible();
+   });
+ 
++  test('should return matching results for search query', async ({ page }) => {
++    const searchInput = page.getByTestId('search-input');
++
++    await expect(page.locator('[data-testid^="email-card-"]').first()).toBeVisible();
++    await searchInput.fill('Project');
++
++    await expect(page.locator('[data-testid^="email-card-"]')).toHaveCount(1);
++    await expect(page.getByText('Found: Project')).toBeVisible();
++  });
++
++  test('should show empty state when no results found', async ({ page }) => {
++    const searchInput = page.getByTestId('search-input');
++
++    await expect(page.locator('[data-testid^="email-card-"]').first()).toBeVisible();
++    await searchInput.fill('NoMatch');
++
++    await expect(page.locator('[data-testid^="email-card-"]')).toHaveCount(0);
++    await expect(page.getByText('No emails in this folder')).toBeVisible();
++  });
++
+   test('should filter emails when searching', async ({ page }) => {
+     const searchInput = page.getByTestId('search-input');
+     
+--- docs/04-execution/15-integration-mod-05/task-T-01/before/tauri.ts	2026-04-27 14:19:59
++++ docs/04-execution/15-integration-mod-05/task-T-01/after/tauri.ts	2026-04-27 14:20:53
+@@ -229,6 +229,9 @@
+         const q = args.query.toLowerCase();
+         const searchAccount = args.accountEmail ?? mockAccounts[0]?.email ?? "demo@nexus-mail.com";
+         recordMockSearchHistory(searchAccount, args.query);
++        if (q.includes("nomatch")) {
++          return [] as any;
++        }
+         return [
+           { uid: "search-1", subject: `Found: ${args.query}`, from: "search@mock.com", date: "Now", snippet: "Matching search result" }
+         ].filter(e => e.subject.toLowerCase().includes(q) || e.snippet.toLowerCase().includes(q)) as any;
+@@ -237,6 +240,9 @@
+         const filters = args.filters ?? {};
+         const filteredAccount = args.accountEmail ?? mockAccounts[0]?.email ?? "demo@nexus-mail.com";
+         recordMockSearchHistory(filteredAccount, args.query);
++        if (query.includes("nomatch")) {
++          return [] as any;
++        }
+         const from = filters.sender ?? "search@mock.com";
+         const attachments = filters.has_attachments
+           ? [{ id: "mock-att", filename: "filter.pdf", size: 512, mime_type: "application/pdf" }]

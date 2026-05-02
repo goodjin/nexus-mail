@@ -1,0 +1,3 @@
+npx playwright test e2e/compose_resilience.spec.ts
+
+Result: PASS (2 tests)

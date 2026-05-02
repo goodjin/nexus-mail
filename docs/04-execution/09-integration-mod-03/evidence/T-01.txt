@@ -1,0 +1,6 @@
+Task: T-01 场景数据准备
+Changes:
+- src/lib/tauri.ts: add security/empty-body mock metadata and empty-body details
+Tests:
+- npx playwright test e2e/mail_detail.spec.ts --reporter=line
+Result: ✅ Passed

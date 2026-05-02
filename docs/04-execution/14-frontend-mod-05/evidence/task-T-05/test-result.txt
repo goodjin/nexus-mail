@@ -1,0 +1,19 @@
+
+> --package-name@0.1.0 test:e2e
+> playwright test compose.spec.ts --reporter=line e2e/search.spec.ts e2e/selection_toolbar.spec.ts e2e/interactions.spec.ts
+
+
+Running 10 tests using 7 workers
+
+[1A[2K[1/10] [chromium] › e2e/interactions.spec.ts:10:3 › Interactions and Validations › should show error message when sending empty email
+[1A[2K[2/10] [chromium] › e2e/selection_toolbar.spec.ts:10:5 › Selection Toolbar › should show selection toolbar when an email is selected
+[1A[2K[3/10] [chromium] › e2e/search.spec.ts:9:3 › Search Functionality › should filter emails when searching
+[1A[2K[4/10] [chromium] › e2e/compose.spec.ts:56:3 › Compose and Send Email › should prefill reply and forward content
+[1A[2K[5/10] [chromium] › e2e/interactions.spec.ts:30:3 › Interactions and Validations › should handle attachments correctly
+[1A[2K[6/10] [chromium] › e2e/interactions.spec.ts:59:3 › Interactions and Validations › should show visible selection state for emails
+[1A[2K[7/10] [chromium] › e2e/compose.spec.ts:14:3 › Compose and Send Email › should open compose modal and send email
+[1A[2K[8/10] [chromium] › e2e/selection_toolbar.spec.ts:26:5 › Selection Toolbar › should select all emails when "Select All" is clicked
+[1A[2K[9/10] [chromium] › e2e/selection_toolbar.spec.ts:40:5 › Selection Toolbar › should invert selection when "Invert Selection" is clicked
+[1A[2K[10/10] [chromium] › e2e/selection_toolbar.spec.ts:54:5 › Selection Toolbar › should clear selection when "Cancel" is clicked
+[1A[2K  2 skipped
+  8 passed (3.3s)

@@ -1,0 +1,60 @@
+   Compiling nexus-mail v0.1.0 (/Users/jin/github/nexus-mail/src-tauri)
+warning: unused import: `header::MessageId`
+  --> src/core/smtp_client.rs:41:87
+   |
+41 |         use lettre::message::{Attachment, MultiPart, SinglePart, header::ContentType, header::MessageId};
+   |                                                                                       ^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `acct_id`
+   --> src/core/sync_engine.rs:212:13
+    |
+212 |         let acct_id = engine
+    |             ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_acct_id`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `engine`
+  --> src/lib.rs:46:17
+   |
+46 |             let engine = core::sync_engine::SyncEngine::new(db.clone());
+   |                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_engine`
+
+warning: variant `Disconnected` is never constructed
+  --> src/core/imap_client.rs:36:5
+   |
+35 | enum ImapState {
+   |      --------- variant in this enum
+36 |     Disconnected,
+   |     ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `nexus-mail` (lib test) generated 4 warnings (run `cargo fix --lib -p nexus-mail --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.10s
+warning: the following packages contain code that will be rejected by a future version of Rust: imap-proto v0.10.2
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/nexus_mail_lib-4f7ff34fce09d7e0)
+
+running 17 tests
+test commands::tests::test_email_domain_validation ... ok
+test commands::tests::test_resolve_account_test_password_from_argument ... ok
+test core::database::tests::test_db_initialization ... ok
+test core::database::tests::test_upsert_logic ... ok
+test core::database::tests::test_fts_search ... ok
+test core::database::tests::test_unread_count_calculation ... ok
+test core::database::tests::test_multi_account_isolation ... ok
+test core::sync_engine::tests::test_incremental_sync_with_mock ... ok
+test core::sync_engine::tests::test_sync_no_new_emails ... ok
+test core::smtp_client::tests::test_smtp_connectivity_fails_on_tls_mismatch ... ok
+test core::imap_client::tests::test_imap_connectivity_fails_on_tls_mismatch ... ok
+test core::security::tests::test_password_not_found ... ok
+test core::security::tests::test_custom_security_ops ... ok
+test core::smtp_client::tests::test_send_email_with_password ... ok
+test commands::tests::test_resolve_account_test_password_requires_existing_secret ... ok
+test core::security::tests::test_oauth_token_ops ... ok
+test core::smtp_client::tests::test_send_email_fails_without_password ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.84s
+

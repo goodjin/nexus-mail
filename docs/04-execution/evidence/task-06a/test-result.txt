@@ -1,0 +1,2 @@
+npm run build --silent: passed
+npm run test:e2e: passed

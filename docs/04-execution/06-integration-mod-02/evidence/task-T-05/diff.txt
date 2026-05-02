@@ -1,0 +1,36 @@
+--- /dev/null	2026-04-27 12:12:22
++++ docs/04-execution/06-integration-mod-02/evidence/task-T-05/after/report.md	2026-04-27 12:12:09
+@@ -0,0 +1,33 @@
++# 执行报告 - 06-integration-mod-02
++
++## 执行概况
++- **计划**: docs/03-dev-plan/06-integration-mod-02.md
++- **开始时间**: 2026-04-27T04:03:35Z
++- **结束时间**: 2026-04-27T04:11:53Z
++- **状态**: ✅ 完成
++
++## 任务执行统计
++| 任务 | 状态 | 说明 |
++| --- | --- | --- |
++| T-01 | ✅ | 增强 mock 配置能力，支持同步增量、空文件夹与失败场景 |
++| T-02 | ✅ | 覆盖首次加载与刷新成功场景 |
++| T-03 | ✅ | 覆盖文件夹切换与列表更新场景 |
++| T-04 | ✅ | 覆盖同步失败提示与空态展示 |
++| T-05 | ✅ | 汇总报告与证据归档 |
++
++## 变更摘要
++- 新增 mock 配置入口，支持同步后未读数变化、空文件夹、失败提示与主题变化。
++- 新增集成测试用例覆盖同步成功、切换文件夹、同步失败与空态场景。
++
++## 测试结果
++- `npx playwright test e2e/folder_sync_badges.spec.ts -g "should show all standard folders"`
++- `npx playwright test e2e/sync_folder_integration.spec.ts`
++- `npx playwright test e2e/sync_folder_integration.spec.ts -g "should switch folders"`
++- `npx playwright test e2e/sync_folder_integration.spec.ts -g "sync failure|empty folder"`
++
++## 证据
++- `docs/04-execution/06-integration-mod-02/evidence/task-T-01`
++- `docs/04-execution/06-integration-mod-02/evidence/task-T-02`
++- `docs/04-execution/06-integration-mod-02/evidence/task-T-03`
++- `docs/04-execution/06-integration-mod-02/evidence/task-T-04`
++- `docs/04-execution/06-integration-mod-02/evidence/task-T-05`

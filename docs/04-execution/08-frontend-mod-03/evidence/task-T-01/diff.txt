@@ -1,0 +1,105 @@
+diff --git a/src/components/mail/EmailList.tsx b/src/components/mail/EmailList.tsx
+index 04ca1fe..3511459 100644
+--- a/src/components/mail/EmailList.tsx
++++ b/src/components/mail/EmailList.tsx
+@@ -12,6 +12,8 @@ interface EmailListProps {
+   onEmailSelect: (email: Email) => void;
+   folderName: string;
+   isLoading: boolean;
++  isFolderLoading: boolean;
++  hasFolder: boolean;
+   searchQuery: string;
+   onSearchChange: (query: string) => void;
+   onDeleteEmails: (uids: string[]) => Promise<void>;
+@@ -33,6 +35,8 @@ const EmailItem = React.memo(({
+   toggleSelect: (uid: string, e: React.MouseEvent) => void;
+   isSelectionMode: boolean;
+ }) => {
++  const isUnread = !email.flags?.includes("\\Seen");
++
+   return (
+     <div className="p-2 pt-1 pb-1 flex items-center gap-2 group">
+       <div className={cn(
+@@ -74,8 +78,12 @@ const EmailItem = React.memo(({
+           {/* Row 1: Subject (Title) */}
+           <div className="flex justify-between items-start gap-2">
+             <h3 className={cn(
+-              "text-sm font-bold truncate flex-1",
+-              itemSelected ? "text-nexus-primary-foreground" : "text-nexus-foreground"
++              "text-sm truncate flex-1",
++              itemSelected
++                ? "text-nexus-primary-foreground font-semibold"
++                : isUnread
++                  ? "text-nexus-foreground font-semibold"
++                  : "text-nexus-foreground/70 font-medium"
+             )}>
+               {email.subject || "(No Subject)"}
+             </h3>
+@@ -84,8 +92,12 @@ const EmailItem = React.memo(({
+           {/* Row 2: Sender & Time */}
+           <div className="flex justify-between items-center text-[11px]">
+             <span className={cn(
+-              "font-medium truncate max-w-[160px]",
+-              itemSelected ? "text-nexus-primary-foreground/90" : "text-nexus-muted"
++              "truncate max-w-[160px]",
++              itemSelected
++                ? "text-nexus-primary-foreground/90 font-medium"
++                : isUnread
++                  ? "text-nexus-foreground/80 font-semibold"
++                  : "text-nexus-muted font-medium"
+             )}>
+               {email.from}
+             </span>
+@@ -101,7 +113,11 @@ const EmailItem = React.memo(({
+           <div className="flex items-end gap-2 mt-0.5">
+             <div className={cn(
+               "text-xs line-clamp-1 flex-1",
+-              itemSelected ? "text-nexus-primary-foreground/80" : "text-nexus-muted"
++              itemSelected
++                ? "text-nexus-primary-foreground/80"
++                : isUnread
++                  ? "text-nexus-foreground/70"
++                  : "text-nexus-muted"
+             )}>
+               {email.snippet}
+             </div>
+@@ -132,12 +148,18 @@ export const EmailList: React.FC<EmailListProps> = ({
+   onEmailSelect,
+   folderName,
+   isLoading,
++  isFolderLoading,
++  hasFolder,
+   searchQuery,
+   onSearchChange,
+   onDeleteEmails,
+   onLoadMore,
+ }) => {
+   const [selectedUids, setSelectedUids] = React.useState<Set<string>>(new Set());
++  const showFolderPrompt = !hasFolder && !isFolderLoading;
++  const showLoading = isLoading || isFolderLoading;
++  const showEmpty = !showLoading && hasFolder && emails.length === 0;
++  const loadingLabel = isFolderLoading && !hasFolder ? "Loading folders..." : "Loading emails...";
+ 
+   const toggleSelect = React.useCallback((uid: string, e: React.MouseEvent) => {
+     e.stopPropagation();
+@@ -237,13 +259,16 @@ export const EmailList: React.FC<EmailListProps> = ({
+       </header>
+       
+       <div className="flex-1 overflow-hidden relative">
+-        {isLoading && emails.length === 0 && (
++        {showFolderPrompt && (
++          <div className="text-center py-10 text-nexus-muted text-sm">Select a folder to get started</div>
++        )}
++        {showLoading && (
+           <div className="absolute inset-0 z-10 flex items-center justify-center bg-nexus-background/50">
+-            <div className="text-nexus-muted text-sm">Loading emails...</div>
++            <div className="text-nexus-muted text-sm">{loadingLabel}</div>
+           </div>
+         )}
+-        {!isLoading && emails.length === 0 && (
+-          <div className="text-center py-10 text-nexus-muted text-sm">No emails found</div>
++        {showEmpty && (
++          <div className="text-center py-10 text-nexus-muted text-sm">No emails in this folder</div>
+         )}
+         
+         <Virtuoso

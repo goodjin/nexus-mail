@@ -1,0 +1,63 @@
+--- docs/04-execution/11-frontend-mod-04/evidence/task-T-01/before/ComposeModal.tsx	2026-04-27 13:37:40
++++ docs/04-execution/11-frontend-mod-04/evidence/task-T-01/after/ComposeModal.tsx	2026-04-27 13:37:57
+@@ -12,6 +12,8 @@
+ 
+ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fromAccount }) => {
+   const [to, setTo] = useState('');
++  const [cc, setCc] = useState('');
++  const [bcc, setBcc] = useState('');
+   const [subject, setSubject] = useState('');
+   const [body, setBody] = useState('');
+   const [sending, setSending] = useState(false);
+@@ -56,8 +58,9 @@
+ 
+   const handleSend = async () => {
+     setError(null);
+-    if (!to || !subject) {
+-      setError("Please fill in recipient and subject");
++    const strippedBody = body.replace(/<[^>]*>/g, '').trim();
++    if (!to.trim() || !subject.trim() || !strippedBody) {
++      setError("Please fill in recipient, subject, and body");
+       return;
+     }
+ 
+@@ -66,6 +69,8 @@
+       await invoke("send_email", {
+         from: fromAccount,
+         to,
++        cc,
++        bcc,
+         subject,
+         body,
+         attachments: attachments.map(a => a.path)
+@@ -114,6 +119,30 @@
+               onChange={(e) => setTo(e.target.value)}
+             />
+           </div>
++
++          <div className="flex items-center space-x-3 border-b pb-2">
++            <label htmlFor="cc" className="text-nexus-muted w-12 text-sm">Cc:</label>
++            <input
++              id="cc"
++              type="text"
++              className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary text-sm"
++              placeholder="cc@example.com"
++              value={cc}
++              onChange={(e) => setCc(e.target.value)}
++            />
++          </div>
++
++          <div className="flex items-center space-x-3 border-b pb-2">
++            <label htmlFor="bcc" className="text-nexus-muted w-12 text-sm">Bcc:</label>
++            <input
++              id="bcc"
++              type="text"
++              className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary text-sm"
++              placeholder="bcc@example.com"
++              value={bcc}
++              onChange={(e) => setBcc(e.target.value)}
++            />
++          </div>
+           
+           <div className="flex items-center space-x-3 border-b pb-2">
+             <label htmlFor="subject" className="text-nexus-muted w-12 text-sm">Subject:</label>

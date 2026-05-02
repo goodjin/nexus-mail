@@ -1,24 +1,151 @@
 import React, { useState } from 'react';
 import { X, Send, Paperclip } from 'lucide-react';
 import { Button } from "../ui/Button";
-import { invoke } from "../../lib/tauri";
+import { invoke, isTauri } from "../../lib/tauri";
 import { RichTextEditor } from "./RichTextEditor";
 
 interface ComposeModalProps {
   isOpen: boolean;
   onClose: () => void;
   fromAccount: string;
+  availableAccounts?: string[];
+  initialValues?: {
+    to?: string;
+    cc?: string;
+    bcc?: string;
+    subject?: string;
+    body?: string;
+  };
 }
 
-export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fromAccount }) => {
+export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fromAccount, availableAccounts = [], initialValues }) => {
+  const [selectedFromAccount, setSelectedFromAccount] = useState(fromAccount);
   const [to, setTo] = useState('');
+  const [cc, setCc] = useState('');
+  const [bcc, setBcc] = useState('');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
+  const [sendFailed, setSendFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Array<{ name: string, path: string, size: number }>>([]);
+  const [isDragActive, setIsDragActive] = useState(false);
+  const [draftStatus, setDraftStatus] = useState<string | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const maxAttachmentBytes = 25 * 1024 * 1024;
+  const draftKey = `nexus-compose-draft:${selectedFromAccount}`;
+  const signatureStorageKey = "nexus-mail-signatures";
+  const resolveDraftIntervalMs = () => {
+    if (typeof window === "undefined") return 30000;
+    const stored = window.localStorage.getItem("nexus-compose-draft-interval-ms");
+    const parsed = stored ? Number(stored) : Number.NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 30000;
+  };
+
+  const escapeHtml = (value: string) =>
+    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  const normalizeText = (value: string) =>
+    value.replace(/\s+/g, " ").trim();
+
+  const getSignatureForAccount = (account: string) => {
+    if (typeof window === "undefined") return "";
+    try {
+      const stored = window.localStorage.getItem(signatureStorageKey);
+      const parsed = stored ? JSON.parse(stored) : {};
+      if (!parsed || typeof parsed !== "object") return "";
+      const signature = (parsed as Record<string, string>)[account];
+      return typeof signature === "string" ? signature : "";
+    } catch (error) {
+      console.warn("Failed to load signature", error);
+      return "";
+    }
+  };
+
+  const appendSignature = (bodyHtml: string, signatureText: string) => {
+    const trimmedSignature = signatureText.trim();
+    if (!trimmedSignature) return bodyHtml;
+    const bodyText = normalizeText(bodyHtml.replace(/<[^>]*>/g, ""));
+    const signaturePlain = normalizeText(trimmedSignature);
+    if (signaturePlain && bodyText.includes(signaturePlain)) {
+      return bodyHtml;
+    }
+    const signatureHtml = escapeHtml(trimmedSignature).replace(/\n/g, "<br />");
+    const separator = bodyHtml.trim() ? "<br /><br />--<br />" : "--<br />";
+    return `${bodyHtml}${separator}${signatureHtml}`;
+  };
+
+  const loadDraft = () => {
+    try {
+      const stored = localStorage.getItem(draftKey);
+      if (!stored) return null;
+      return JSON.parse(stored) as {
+        to?: string;
+        cc?: string;
+        bcc?: string;
+        subject?: string;
+        body?: string;
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    setSelectedFromAccount(fromAccount);
+    const draft = initialValues ? null : loadDraft();
+    setTo(initialValues?.to ?? draft?.to ?? '');
+    setCc(initialValues?.cc ?? draft?.cc ?? '');
+    setBcc(initialValues?.bcc ?? draft?.bcc ?? '');
+    setSubject(initialValues?.subject ?? draft?.subject ?? '');
+    setBody(initialValues?.body ?? draft?.body ?? '');
+    setAttachments([]);
+    setError(null);
+    setSending(false);
+    setSendFailed(false);
+    setDraftStatus(draft ? "Draft loaded" : null);
+  }, [
+    isOpen,
+    initialValues?.to,
+    initialValues?.cc,
+    initialValues?.bcc,
+    initialValues?.subject,
+    initialValues?.body
+  ]);
+
+  const persistDraft = React.useCallback(() => {
+    const payload = { to, cc, bcc, subject, body };
+    try {
+      localStorage.setItem(draftKey, JSON.stringify(payload));
+      setDraftStatus("Draft saved");
+    } catch {
+      setDraftStatus("Draft save failed");
+    }
+  }, [bcc, body, cc, draftKey, subject, to]);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const intervalMs = resolveDraftIntervalMs();
+    const interval = setInterval(() => {
+      persistDraft();
+    }, intervalMs);
+    return () => clearInterval(interval);
+  }, [isOpen, persistDraft]);
 
   if (!isOpen) return null;
+
+  const applyAttachmentLimits = (newAttachments: Array<{ name: string; path: string; size: number }>) => {
+    if (newAttachments.length === 0) return;
+    const oversized = newAttachments.filter(att => att.size > maxAttachmentBytes);
+    if (oversized.length > 0) {
+      setError(`Attachment too large (max 25 MB): ${oversized.map(att => att.name).join(", ")}`);
+    }
+    const valid = newAttachments.filter(att => att.size <= maxAttachmentBytes);
+    if (valid.length > 0) {
+      setAttachments((prev) => [...prev, ...valid]);
+    }
+  };
 
   const handleAddAttachment = async () => {
     try {
@@ -35,18 +162,18 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
           const stats = await lstat(path);
           return {
             name: path.split('/').pop() || "unnamed",
-            path,
-            size: stats.size
+              path,
+              size: stats.size
           };
         }));
-        setAttachments([...attachments, ...newAttachments]);
+        applyAttachmentLimits(newAttachments);
       } else if (selected) {
           const path = selected as string;
           const stats = await lstat(path);
-          setAttachments([...attachments, {
-              name: path.split('/').pop() || "unnamed",
-              path,
-              size: stats.size
+          applyAttachmentLimits([{
+            name: path.split('/').pop() || "unnamed",
+            path,
+            size: stats.size
           }]);
       }
     } catch (e) {
@@ -54,28 +181,123 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
     }
   };
 
+  const handleAttachmentClick = () => {
+    if (!isTauri) {
+      fileInputRef.current?.click();
+      return;
+    }
+    handleAddAttachment();
+  };
+
+  const handleFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) return;
+    applyAttachmentLimits(
+      files.map((file) => ({
+        name: file.name,
+        path: file.name,
+        size: file.size
+      }))
+    );
+    event.target.value = "";
+  };
+
+  const handleDrop = async (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragActive(false);
+    const files = Array.from(event.dataTransfer.files);
+    const paths = files.map((file) => (file as File & { path?: string }).path).filter(Boolean) as string[];
+    if (paths.length === 0) {
+      setError("Drag-and-drop attachments require file system access.");
+      return;
+    }
+    try {
+      const { lstat } = await import("@tauri-apps/plugin-fs");
+      const newAttachments = await Promise.all(paths.map(async (path) => {
+        const stats = await lstat(path);
+        return {
+          name: path.split('/').pop() || "unnamed",
+          path,
+          size: stats.size
+        };
+      }));
+      applyAttachmentLimits(newAttachments);
+    } catch (e) {
+      console.error("Failed to handle dropped attachments", e);
+    }
+  };
+
   const handleSend = async () => {
     setError(null);
-    if (!to || !subject) {
-      setError("Please fill in recipient and subject");
+    const strippedBody = body.replace(/<[^>]*>/g, '').trim();
+    const parseRecipients = (value: string) =>
+      value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    const isValidEmail = (value: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value);
+    const recipients = parseRecipients(to);
+    const ccRecipients = parseRecipients(cc);
+    const bccRecipients = parseRecipients(bcc);
+
+    if (!recipients.length || !strippedBody) {
+      setError("Please fill in recipient and body");
+      return;
+    }
+    const invalid = [...recipients, ...ccRecipients, ...bccRecipients].filter((value) => !isValidEmail(value));
+    if (invalid.length > 0) {
+      setError(`Invalid email address: ${invalid[0]}`);
+      return;
+    }
+    if (!subject.trim()) {
+      const proceed = confirm("Send without a subject?");
+      if (!proceed) {
+        return;
+      }
+    }
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setError("You appear to be offline. Draft saved locally.");
+      persistDraft();
       return;
     }
 
     setSending(true);
+    setSendFailed(false);
     try {
+      const signature = getSignatureForAccount(selectedFromAccount);
+      const bodyWithSignature = appendSignature(body, signature);
       await invoke("send_email", {
-        from: fromAccount,
-        to,
+        from: selectedFromAccount,
+        to: recipients.join(", "),
+        cc: ccRecipients.join(", "),
+        bcc: bccRecipients.join(", "),
         subject,
-        body,
+        body: bodyWithSignature,
         attachments: attachments.map(a => a.path)
       });
+      try {
+        localStorage.removeItem(draftKey);
+      } catch {
+        // ignore storage failures
+      }
+      alert("Email sent successfully");
       onClose();
     } catch (e) {
-      setError(`Failed to send email: ${e}`);
+      const message = e instanceof Error ? e.message : String(e);
+      setError(`Failed to send email: ${message}`);
+      setSendFailed(true);
+      persistDraft();
     } finally {
       setSending(false);
     }
+  };
+
+  const handleClose = () => {
+    const hasContent = to.trim() || cc.trim() || bcc.trim() || subject.trim() || body.replace(/<[^>]*>/g, '').trim();
+    if (hasContent) {
+      persistDraft();
+    }
+    onClose();
   };
 
   return (
@@ -83,7 +305,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
       <div className="bg-nexus-card w-full max-w-2xl rounded-2xl border shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
         <div className="p-4 border-b flex items-center justify-between bg-nexus-sidebar/30">
           <h2 className="font-semibold text-nexus-primary">New Message</h2>
-          <Button variant="ghost" size="icon" onClick={onClose}>
+          <Button variant="ghost" size="icon" onClick={handleClose}>
             <X className="w-5 h-5" />
           </Button>
         </div>
@@ -97,10 +319,35 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
               {error}
             </div>
           )}
+          {draftStatus && (
+            <div
+              data-testid="compose-draft-status"
+              className="text-[10px] text-nexus-muted"
+            >
+              {draftStatus}
+            </div>
+          )}
           
           <div className="flex items-center space-x-3 border-b pb-2">
             <span className="text-nexus-muted w-12 text-sm">From:</span>
-            <span className="font-medium text-nexus-primary text-sm">{fromAccount}</span>
+            {availableAccounts.length > 1 ? (
+              <select
+                data-testid="compose-from"
+                value={selectedFromAccount}
+                onChange={(e) => setSelectedFromAccount(e.target.value)}
+                className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary text-sm font-medium"
+              >
+                {availableAccounts.map((account) => (
+                  <option key={account} value={account}>
+                    {account}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="font-medium text-nexus-primary text-sm" data-testid="compose-from">
+                {selectedFromAccount}
+              </span>
+            )}
           </div>
           
           <div className="flex items-center space-x-3 border-b pb-2">
@@ -110,8 +357,33 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
               type="text" 
               className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary text-sm"
               placeholder="recipient@example.com"
+              data-testid="compose-to"
               value={to}
               onChange={(e) => setTo(e.target.value)}
+            />
+          </div>
+
+          <div className="flex items-center space-x-3 border-b pb-2">
+            <label htmlFor="cc" className="text-nexus-muted w-12 text-sm">Cc:</label>
+            <input
+              id="cc"
+              type="text"
+              className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary text-sm"
+              placeholder="cc@example.com"
+              value={cc}
+              onChange={(e) => setCc(e.target.value)}
+            />
+          </div>
+
+          <div className="flex items-center space-x-3 border-b pb-2">
+            <label htmlFor="bcc" className="text-nexus-muted w-12 text-sm">Bcc:</label>
+            <input
+              id="bcc"
+              type="text"
+              className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary text-sm"
+              placeholder="bcc@example.com"
+              value={bcc}
+              onChange={(e) => setBcc(e.target.value)}
             />
           </div>
           
@@ -122,16 +394,38 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
               type="text" 
               className="flex-1 bg-transparent border-none focus:outline-none text-nexus-primary font-medium text-sm"
               placeholder="Enter subject"
+              data-testid="compose-subject"
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
             />
           </div>
           
-          <RichTextEditor 
-            content={body} 
-            onChange={setBody} 
-            className="flex-1 min-h-[300px]"
-          />
+          <div
+            className={`relative rounded-lg border border-dashed px-3 py-2 transition-colors ${
+              isDragActive ? "border-nexus-accent bg-nexus-sidebar/40" : "border-nexus-border/40"
+            }`}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setIsDragActive(true);
+            }}
+            onDragOver={(event) => event.preventDefault()}
+            onDragLeave={() => setIsDragActive(false)}
+            onDrop={handleDrop}
+          >
+            <textarea
+              className="absolute top-0 left-0 w-1 h-1 opacity-0"
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+            />
+            <RichTextEditor 
+              content={body} 
+              onChange={setBody} 
+              className="flex-1 min-h-[300px]"
+            />
+            <p className="text-[10px] text-nexus-muted mt-2">
+              Drag files here to attach (max 25 MB each).
+            </p>
+          </div>
 
           {attachments.length > 0 && (
             <div className="flex flex-wrap gap-2 pt-2 border-t">
@@ -156,13 +450,21 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
             <Button 
                 variant="ghost" 
                 size="icon"
-                onClick={handleAddAttachment}
+                onClick={handleAttachmentClick}
             >
               <Paperclip className="w-5 h-5 text-nexus-muted" />
             </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              data-testid="compose-attachment-input"
+              onChange={handleFileInputChange}
+            />
           </div>
           <div className="flex space-x-3">
-            <Button variant="ghost" onClick={onClose} disabled={sending}>Cancel</Button>
+            <Button variant="ghost" onClick={handleClose} disabled={sending}>Cancel</Button>
             <Button 
                 className="bg-nexus-accent hover:bg-nexus-accent/90 text-white px-6 rounded-xl flex items-center space-x-2"
                 onClick={handleSend}
@@ -170,7 +472,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({ isOpen, onClose, fro
                 data-testid="compose-send-button"
             >
               <Send className="w-4 h-4" />
-              <span>{sending ? 'Sending...' : 'Send'}</span>
+              <span>{sending ? 'Sending...' : sendFailed ? 'Retry send' : 'Send'}</span>
             </Button>
           </div>
         </div>

@@ -1,0 +1,20 @@
+
+> --package-name@0.1.0 test:e2e
+> playwright test compose.spec.ts e2e/sync_feedback.spec.ts e2e/multi_account_persistence.spec.ts
+
+
+Running 7 tests using 7 workers
+
+[1A[2K[1/7] [chromium] › e2e/multi_account_persistence.spec.ts:62:3 › Account Access & Switching › should show SMTP connection failure feedback
+[1A[2K[2/7] [chromium] › e2e/multi_account_persistence.spec.ts:53:3 › Account Access & Switching › should show IMAP auth failure feedback
+[1A[2K[3/7] [chromium] › e2e/sync_feedback.spec.ts:9:3 › Sync feedback › should show sync loading and completion toast
+[1A[2K[4/7] [chromium] › e2e/compose.spec.ts:10:3 › Compose and Send Email › should open compose modal and send email
+[1A[2K[5/7] [chromium] › e2e/multi_account_persistence.spec.ts:33:3 › Account Access & Switching › should create account and show success state
+[1A[2K[6/7] [chromium] › e2e/multi_account_persistence.spec.ts:72:3 › Account Access & Switching › should switch accounts from the sidebar
+[1A[2K[7/7] [chromium] › e2e/multi_account_persistence.spec.ts:22:3 › Account Access & Switching › should prevent creation when password is missing
+[1A[2K  7 passed (5.0s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

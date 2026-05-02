@@ -1,0 +1,7 @@
+
+Running 3 tests using 3 workers
+
+[1A[2K[1/3] [chromium] › e2e/multi_account_persistence.spec.ts:53:3 › Account Access & Switching › should show IMAP auth failure feedback
+[1A[2K[2/3] [chromium] › e2e/multi_account_persistence.spec.ts:62:3 › Account Access & Switching › should show SMTP connection failure feedback
+[1A[2K[3/3] [chromium] › e2e/multi_account_persistence.spec.ts:22:3 › Account Access & Switching › should prevent creation when password is missing
+[1A[2K  3 passed (4.4s)

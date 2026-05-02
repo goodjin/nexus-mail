@@ -1,0 +1,52 @@
+--- docs/04-execution/03-integration-mod-01/evidence/task-T-05/before/report.md	2026-04-27 11:19:46
++++ docs/04-execution/03-integration-mod-01/evidence/task-T-05/after/report.md	2026-04-27 11:20:28
+@@ -1,23 +1,32 @@
+ # 执行报告 - 03-integration-mod-01
+ 
+-## 状态
+-⛔ 阻塞（前置条件未满足）
++## 执行概况
++- **计划**: docs/03-dev-plan/03-integration-mod-01.md
++- **开始时间**: 2026-04-27T03:08:50Z
++- **结束时间**: 2026-04-27T03:20:05Z
++- **状态**: ✅ 完成
+ 
+-## 缺失前置条件
+-1. `SettingsModal` 缺少自动发现入口（前端 MOD-01 T-03 要求的占位入口尚未实现）。
+-2. 创建账户缺少密码时无用户可见错误提示（INT-002 期望前端提示错误，但当前仅禁用保存按钮）。
+-
+-## 影响
+-集成测试无法覆盖 INT-002（缺少密码保存失败）及相关前端验证路径，需先补齐前端 MOD-01 功能。
+-
+-## 任务状态
++## 任务执行统计
+ | 任务 | 状态 | 说明 |
+ | --- | --- | --- |
+-| T-01 | ⛔ | 前置条件不足 |
+-| T-02 | ⛔ | 前置条件不足 |
+-| T-03 | ⛔ | 前置条件不足 |
+-| T-04 | ⛔ | 前置条件不足 |
+-| T-05 | ⛔ | 前置条件不足 |
++| T-01 | ✅ | 完成 Playwright mock 配置与可重置测试账户 |
++| T-02 | ✅ | 创建账户主路径场景覆盖 |
++| T-03 | ✅ | 失败路径（缺少密码/IMAP 认证/SMTP 连接）覆盖 |
++| T-04 | ✅ | 多账户切换与隔离验证 |
++| T-05 | ✅ | 测试报告模板输出 |
+ 
+-## 测试
+-未执行（阻塞）。
++## 变更摘要
++- 强化 Web mock（账户持久化、IMAP/SMTP 失败模拟、账户清理）。
++- 补齐账户接入集成用例：创建、失败路径、多账户切换隔离。
++
++## 测试结果
++- `npx playwright test e2e/multi_account_persistence.spec.ts -g "should create account and show success state"` ✅
++- `npx playwright test e2e/multi_account_persistence.spec.ts -g "password is missing|IMAP auth failure|SMTP connection failure"` ✅
++- `npx playwright test e2e/multi_account_persistence.spec.ts -g "should switch accounts from the sidebar"` ✅
++
++## 证据
++- `docs/04-execution/03-integration-mod-01/evidence/task-T-01`
++- `docs/04-execution/03-integration-mod-01/evidence/task-T-02`
++- `docs/04-execution/03-integration-mod-01/evidence/task-T-03`
++- `docs/04-execution/03-integration-mod-01/evidence/task-T-04`
++- `docs/04-execution/03-integration-mod-01/evidence/task-T-05`

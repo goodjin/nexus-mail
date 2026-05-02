@@ -1,0 +1,128 @@
+
+> --package-name@0.1.0 test:e2e
+> playwright test compose.spec.ts --reporter=line e2e/selection_toolbar.spec.ts
+
+
+Running 6 tests using 6 workers
+
+[1A[2K[1/6] [chromium] › e2e/selection_toolbar.spec.ts:41:5 › Selection Toolbar › should invert selection when "Invert Selection" is clicked
+[1A[2K[2/6] [chromium] › e2e/selection_toolbar.spec.ts:54:5 › Selection Toolbar › should clear selection when "Cancel" is clicked
+[1A[2K[3/6] [chromium] › e2e/compose.spec.ts:56:3 › Compose and Send Email › should prefill reply and forward content
+[1A[2K[4/6] [chromium] › e2e/selection_toolbar.spec.ts:10:5 › Selection Toolbar › should show selection toolbar when an email is selected
+[1A[2K[5/6] [chromium] › e2e/compose.spec.ts:14:3 › Compose and Send Email › should open compose modal and send email
+[1A[2K[6/6] [chromium] › e2e/selection_toolbar.spec.ts:28:5 › Selection Toolbar › should select all emails when "Select All" is clicked
+[1A[2K  1) [chromium] › e2e/compose.spec.ts:56:3 › Compose and Send Email › should prefill reply and forward content 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: getByTestId('action-reply')
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 10000ms[22m
+    [2m  - waiting for getByTestId('action-reply')[22m
+
+
+      61 |     const fromText = await firstEmail.locator('span').first().innerText();
+      62 |     await firstEmail.click();
+    > 63 |     await expect(page.getByTestId('action-reply')).toBeVisible({ timeout: 10000 });
+         |                                                    ^
+      64 |
+      65 |     await page.locator('[data-testid="action-reply"]').click();
+      66 |     await expect(page.getByText('New Message')).toBeVisible();
+        at /Users/jin/github/nexus-mail/e2e/compose.spec.ts:63:52
+
+
+[1A[2K  2) [chromium] › e2e/selection_toolbar.spec.ts:28:5 › Selection Toolbar › should select all emails when "Select All" is clicked 
+
+    [31mTest timeout of 30000ms exceeded.[39m
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+    [2m  - waiting for locator('.group').first().locator('.rounded-full.border-2')[22m
+
+
+      30 |         const firstEmail = page.locator('.group').first();
+      31 |         await firstEmail.hover();
+    > 32 |         await firstEmail.locator('.rounded-full.border-2').click();
+         |                                                            ^
+      33 |
+      34 |         // Click Select All
+      35 |         await page.getByTitle('Select All').click();
+        at /Users/jin/github/nexus-mail/e2e/selection_toolbar.spec.ts:32:60
+
+    Error Context: test-results/selection_toolbar-Selectio-7c01a--when-Select-All-is-clicked-chromium/error-context.md
+
+
+[1A[2K  3) [chromium] › e2e/selection_toolbar.spec.ts:54:5 › Selection Toolbar › should clear selection when "Cancel" is clicked 
+
+    [31mTest timeout of 30000ms exceeded.[39m
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+    [2m  - waiting for locator('.group').first().locator('.rounded-full.border-2')[22m
+
+
+      56 |         const firstEmail = page.locator('.group').first();
+      57 |         await firstEmail.hover();
+    > 58 |         await firstEmail.locator('.rounded-full.border-2').click();
+         |                                                            ^
+      59 |
+      60 |         // Click Cancel
+      61 |         await page.getByTitle('Cancel').click();
+        at /Users/jin/github/nexus-mail/e2e/selection_toolbar.spec.ts:58:60
+
+    Error Context: test-results/selection_toolbar-Selectio-79e46-tion-when-Cancel-is-clicked-chromium/error-context.md
+
+
+[1A[2K  4) [chromium] › e2e/selection_toolbar.spec.ts:41:5 › Selection Toolbar › should invert selection when "Invert Selection" is clicked 
+
+    [31mTest timeout of 30000ms exceeded.[39m
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+    [2m  - waiting for locator('.group').first().locator('.rounded-full.border-2')[22m
+
+
+      43 |         const firstEmail = page.locator('.group').first();
+      44 |         await firstEmail.hover();
+    > 45 |         await firstEmail.locator('.rounded-full.border-2').click();
+         |                                                            ^
+      46 |
+      47 |         // Click Invert Selection
+      48 |         await page.getByTitle('Invert Selection').click();
+        at /Users/jin/github/nexus-mail/e2e/selection_toolbar.spec.ts:45:60
+
+    Error Context: test-results/selection_toolbar-Selectio-2d317-Invert-Selection-is-clicked-chromium/error-context.md
+
+
+[1A[2K  5) [chromium] › e2e/selection_toolbar.spec.ts:10:5 › Selection Toolbar › should show selection toolbar when an email is selected 
+
+    [31mTest timeout of 30000ms exceeded.[39m
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+    [2m  - waiting for locator('.group').first().locator('.rounded-full.border-2')[22m
+
+
+      15 |         // Find and click the checkbox (round div)
+      16 |         const checkbox = firstEmail.locator('.rounded-full.border-2');
+    > 17 |         await checkbox.click();
+         |                        ^
+      18 |
+      19 |         // Verify toolbar is visible
+      20 |         await expect(page.getByTitle('Select All')).toBeVisible();
+        at /Users/jin/github/nexus-mail/e2e/selection_toolbar.spec.ts:17:24
+
+    Error Context: test-results/selection_toolbar-Selectio-f7ab4-r-when-an-email-is-selected-chromium/error-context.md
+
+
+[1A[2K  5 failed
+    [chromium] › e2e/compose.spec.ts:56:3 › Compose and Send Email › should prefill reply and forward content 
+    [chromium] › e2e/selection_toolbar.spec.ts:10:5 › Selection Toolbar › should show selection toolbar when an email is selected 
+    [chromium] › e2e/selection_toolbar.spec.ts:28:5 › Selection Toolbar › should select all emails when "Select All" is clicked 
+    [chromium] › e2e/selection_toolbar.spec.ts:41:5 › Selection Toolbar › should invert selection when "Invert Selection" is clicked 
+    [chromium] › e2e/selection_toolbar.spec.ts:54:5 › Selection Toolbar › should clear selection when "Cancel" is clicked 
+  1 passed (32.1s)

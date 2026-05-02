@@ -1,0 +1,21 @@
+--- docs/04-execution/03-integration-mod-01/evidence/task-T-04/before/multi_account_persistence.spec.ts	2026-04-27 11:17:56
++++ docs/04-execution/03-integration-mod-01/evidence/task-T-04/after/multi_account_persistence.spec.ts	2026-04-27 11:18:29
+@@ -78,9 +78,18 @@
+     await page.getByRole('button', { name: 'Close' }).click();
+     await expect(page.getByText('Settings')).toBeHidden();
+ 
++    const inboxBadge = page.getByTestId('badge-inbox');
++    await expect(inboxBadge).toHaveText('95');
++
+     const newAccountButton = page.locator(`button[title="${newEmail}"]`);
+     await expect(newAccountButton).toBeVisible();
+     await newAccountButton.click();
+     await expect(newAccountButton).toHaveClass(/ring-nexus-accent/);
++    await expect(inboxBadge).toHaveText('12');
++
++    const demoAccountButton = page.locator('button[title="demo@nexus-mail.com"]');
++    await demoAccountButton.click();
++    await expect(demoAccountButton).toHaveClass(/ring-nexus-accent/);
++    await expect(inboxBadge).toHaveText('95');
+   });
+ });

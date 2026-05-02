@@ -1,0 +1,3 @@
+npx playwright test e2e/compose_attachments.spec.ts
+
+Result: PASS (1 test)

@@ -45,9 +45,6 @@ pub fn run() {
             // 初始化同步引擎
             let engine = core::sync_engine::SyncEngine::new(db.clone());
 
-            // 初始化同步引擎
-            let engine = core::sync_engine::SyncEngine::new(db.clone());
-
             // 注入全局状态，供 Commands 使用
             app.manage(db);
             app.manage(engine);
@@ -61,6 +58,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_accounts,
             commands::get_folders,
+            commands::create_folder,
+            commands::rename_folder,
+            commands::delete_folder,
             commands::get_emails,
             commands::get_email_details,
             commands::get_attachment,
@@ -69,14 +69,26 @@ pub fn run() {
             commands::update_email_flag,
             commands::delete_email,
             commands::search_emails,
+            commands::search_emails_with_filters,
+            commands::get_search_history,
+            commands::clear_search_history,
             commands::sync_account,
             commands::send_email,
+            commands::apply_email_action,
+            commands::move_emails,
             commands::get_settings,
+            commands::get_app_settings,
             commands::update_setting,
+            commands::update_app_settings,
+            commands::get_theme_mode,
+            commands::update_theme_mode,
+            commands::get_shortcuts,
+            commands::update_shortcuts,
             commands::get_accounts_detailed,
             commands::update_account_details,
             commands::update_account_password,
             commands::test_account_connection,
+            commands::discover_account_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

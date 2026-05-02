@@ -7,7 +7,7 @@ test.describe('Visual Regression Testing', () => {
     
     // Wait for the mock data to render
     await page.waitForSelector('text=Nexus');
-    await page.waitForSelector('text=Inbox');
+    await page.waitForSelector('[data-testid="folder-inbox"]');
     await page.waitForSelector('text=Nexus Mail Sample #100');
     
     // Take a screenshot of the entire page and compare it to the baseline
@@ -21,12 +21,14 @@ test.describe('Visual Regression Testing', () => {
 
   test('Sidebar should be consistent', async ({ page }) => {
     await page.goto('/');
+    await page.waitForSelector('[data-testid="folder-inbox"]');
     const sidebar = page.locator('aside');
     await expect(sidebar).toHaveScreenshot('sidebar.png');
   });
 
   test('Email List should be consistent', async ({ page }) => {
     await page.goto('/');
+    await page.waitForSelector('[data-testid^="email-card-"]');
     const list = page.locator('section'); // EmailList is a <section>
     await expect(list).toHaveScreenshot('email-list.png');
   });

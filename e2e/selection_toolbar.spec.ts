@@ -7,60 +7,57 @@ test.describe('Selection Toolbar', () => {
         await page.waitForSelector('[data-testid^="email-card-"]');
     });
 
-    test('should show selection toolbar when an email is selected', async ({ page }) => {
-        const firstEmail = page.locator('.group').first();
-        // Hover to show checkbox
-        await firstEmail.hover();
-        
-        // Find and click the checkbox (round div)
-        const checkbox = firstEmail.locator('.rounded-full.border-2');
+    test('should show only mark read and delete actions when emails are selected', async ({ page }) => {
+        const firstCard = page.locator('[data-testid^="email-card-"]').first();
+        await expect(firstCard).toBeVisible();
+        const checkbox = firstCard.locator('..').locator('.rounded-full.border-2');
+        await firstCard.hover();
         await checkbox.click();
 
-        // Verify toolbar is visible
-        await expect(page.getByTitle('Select All')).toBeVisible();
-        await expect(page.getByTitle('Invert Selection')).toBeVisible();
-        await expect(page.getByTitle('Cancel')).toBeVisible();
-        
-        // Verify count
-        await expect(page.getByTestId('selected-count')).toContainText('1');
+        await expect(page.getByTestId('selected-count')).toContainText('1 selected');
+        await expect(page.getByTestId('bulk-mark-read')).toBeVisible();
+        await expect(page.getByTestId('bulk-delete')).toBeVisible();
+        await expect(page.getByTitle('Select All')).toHaveCount(0);
+        await expect(page.getByTitle('Invert Selection')).toHaveCount(0);
+        await expect(page.getByTitle('Cancel')).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Mark unread' })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Flag' })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Unflag' })).toHaveCount(0);
     });
 
-    test('should select all emails when "Select All" is clicked', async ({ page }) => {
-        // Select one first to show toolbar
-        const firstEmail = page.locator('.group').first();
-        await firstEmail.hover();
-        await firstEmail.locator('.rounded-full.border-2').click();
+    test('should mark selected emails as read and clear the selection', async ({ page }) => {
+        const badge = page.getByTestId('badge-inbox');
+        const initialText = await badge.innerText();
+        const initialCount = Number.parseInt(initialText, 10);
 
-        // Click Select All
-        await page.getByTitle('Select All').click();
-
-        // Verify count is 100 (based on seed data)
-        await expect(page.getByTestId('selected-count')).toContainText('100');
+        const firstCard = page.locator('[data-testid^="email-card-"]').first();
+        await firstCard.hover();
+        await firstCard.locator('..').locator('.rounded-full.border-2').click();
+        await expect(page.getByTestId('selected-count')).toContainText('1 selected');
+        await page.getByTestId('bulk-mark-read').click();
+        await expect(badge).toHaveText(String(initialCount));
+        await expect(page.getByTestId('selected-count')).toHaveCount(0);
     });
 
-    test('should invert selection when "Invert Selection" is clicked', async ({ page }) => {
-        // Select one first
-        const firstEmail = page.locator('.group').first();
-        await firstEmail.hover();
-        await firstEmail.locator('.rounded-full.border-2').click();
+    test('should delete selected emails from the simplified toolbar', async ({ page }) => {
+        const firstCard = page.locator('[data-testid^="email-card-"]').first();
+        const testId = await firstCard.getAttribute('data-testid');
+        expect(testId).toBeTruthy();
 
-        // Click Invert Selection
-        await page.getByTitle('Invert Selection').click();
+        await firstCard.hover();
+        await firstCard.locator('..').locator('.rounded-full.border-2').click();
+        await expect(page.getByTestId('selected-count')).toContainText('1 selected');
 
-        // Should now have 99 selected (100 total - 1 initially selected)
-        await expect(page.getByTestId('selected-count')).toContainText('99');
-    });
+        const dialogPromise = new Promise<void>((resolve) => {
+            page.once('dialog', async (dialog) => {
+                expect(dialog.type()).toBe('confirm');
+                await dialog.accept();
+                resolve();
+            });
+        });
+        await page.getByTestId('bulk-delete').click();
+        await dialogPromise;
 
-    test('should clear selection when "Cancel" is clicked', async ({ page }) => {
-        // Select one
-        const firstEmail = page.locator('.group').first();
-        await firstEmail.hover();
-        await firstEmail.locator('.rounded-full.border-2').click();
-
-        // Click Cancel
-        await page.getByTitle('Cancel').click();
-
-        // Toolbar should disappear
-        await expect(page.getByTitle('Select All')).not.toBeVisible();
+        await expect(page.locator(`[data-testid="${testId}"]`)).toHaveCount(0);
     });
 });

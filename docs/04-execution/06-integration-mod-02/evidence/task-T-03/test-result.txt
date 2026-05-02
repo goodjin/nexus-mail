@@ -1,0 +1,10 @@
+
+Running 1 test using 1 worker
+
+[1A[2K[1/1] [chromium] › e2e/sync_folder_integration.spec.ts:33:3 › Integration - Sync and Folders › should switch folders and refresh list context
+[1A[2K  1 passed (1.8s)
+
+To open last HTML report run:
+[36m[39m
+[36m  npx playwright show-report[39m
+[36m[39m

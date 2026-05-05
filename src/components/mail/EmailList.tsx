@@ -357,6 +357,7 @@ export const EmailList: React.FC<EmailListProps> = ({
         
         <div
           className="h-full overflow-auto"
+          data-testid="email-list-scroll"
           onScroll={(event) => {
             const target = event.currentTarget;
             if (isLoading) return;

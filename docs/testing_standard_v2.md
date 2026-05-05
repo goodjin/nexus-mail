@@ -15,7 +15,11 @@
 - **布局鲁棒性**: 验证在不同窗口尺寸下的瀑布流或弹性布局表现。
 
 ### 1.3 交互层 (E2E)
-- **定位标准**: **严禁**使用具体的 CSS Class 或 Index 定位。必须统一使用 `data-testid`。
+- **定位标准**: **严禁**使用具体的 CSS Class 或 Index 定位。定位优先级如下：
+  1. **语义定位优先**：`getByRole` / `getByLabel` / `getByPlaceholder` 等可访问语义选择器。
+  2. **`data-testid`**：当语义定位不稳定或存在重复文本时，使用 `data-testid`（要求在当前页面/组件范围内唯一）。
+  3. **文本定位限制**：仅允许在**明确作用域**内使用 `getByText(..., { exact: true })`，不得作为全局唯一断言。
+- **冲突处理**: 出现 strict mode 多重匹配时，必须改为 `data-testid` 或缩小到明确容器作用域。
 - **环境隔离**: E2E 必须同时支持“浏览器 Mock 模式”（快速反馈）和“Tauri 集成模式”（深度验证）。
 - **桌面路径验证**: 涉及本地文件保存、附件下载、导出、打开系统对话框的功能，除浏览器 Mock 外，必须至少有一条 **打包桌面版真实路径** 验证，覆盖 capability / permission scope 与系统文件选择行为。
 
@@ -70,5 +74,5 @@
 - **Snapshot 更新**: 当 UI 故意变更（如重构、新增功能）导致 VRT 失败时，必须手动运行 `playwright test --update-snapshots` 并提交新的基准图。
 - **测试现状检查表**:
     - [x] 模块化 Mock 数据映射 (保证 Web/App 双端一致性)。
-    - [x] 统一 `data-testid` 命名空间 (如 `action-xxx`, `badge-xxx`)。
+    - [x] 统一 `data-testid` 命名空间 (如 `action-xxx`, `badge-xxx`) 并保证**页面/组件范围内唯一**。
     - [x] 所有 Tauri `invoke` 必须有对应的 Mock Case。

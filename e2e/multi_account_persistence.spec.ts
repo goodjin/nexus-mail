@@ -2,20 +2,21 @@ import { test, expect } from '@playwright/test';
 
 const openAccountsTab = async (page) => {
   await page.goto('/');
-  await page.locator('button[title="Settings"]').click();
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  await page.evaluate(() => localStorage.setItem('nexus-test-open-settings', 'accounts'));
+  await page.reload();
+  await expect(page.getByTestId('settings-modal')).toBeVisible();
   await page.getByRole('button', { name: 'Accounts' }).click();
 };
 
 const openAddAccount = async (page) => {
   await openAccountsTab(page);
-  await page.getByRole('button', { name: 'Add New Account' }).click();
+  await page.getByTestId('account-add-new').click();
 };
 
 const fillAccountForm = async (page, email: string, displayName: string, password: string) => {
-  await page.locator('input[type="email"]').fill(email);
-  await page.locator('label:has-text("Display Name")').locator('..').locator('input').fill(displayName);
-  await page.locator('input[placeholder="Leave blank to keep current"]').fill(password);
+  await page.getByTestId('account-email').fill(email);
+  await page.getByTestId('account-display-name').fill(displayName);
+  await page.getByTestId('account-password').fill(password);
 };
 
 test.describe('Account Access & Switching', () => {
@@ -38,8 +39,10 @@ test.describe('Account Access & Switching', () => {
     await expect(page.getByText('Saved successfully.')).toBeVisible();
     await expect(page.getByTestId(`account-item-${newEmail}`)).toBeVisible();
     await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.getByRole('heading', { name: 'Settings' })).toBeHidden();
+    await expect(page.getByTestId('settings-modal')).toHaveCount(0);
 
+    await page.reload();
+    await page.waitForSelector('aside');
     const newAccountButton = page.locator(`button[title="${newEmail}"]`);
     await expect(newAccountButton).toBeVisible();
     await newAccountButton.click();
@@ -55,7 +58,7 @@ test.describe('Account Access & Switching', () => {
     const email = `fail-${Date.now()}@test.com`;
     await fillAccountForm(page, email, 'Fail Account', 'error');
     await page.getByRole('button', { name: 'Test Connection' }).click();
-    await expect(page.getByText('认证失败')).toBeVisible();
+    await expect(page.getByText('Authentication failed')).toBeVisible();
     await expect(page.locator(`[data-testid="account-item-${email}"]`)).toHaveCount(0);
   });
 
@@ -63,9 +66,9 @@ test.describe('Account Access & Switching', () => {
     await openAddAccount(page);
     const email = `smtp-fail-${Date.now()}@test.com`;
     await fillAccountForm(page, email, 'SMTP Fail', 'password');
-    await page.locator('label:has-text("SMTP Host")').locator('..').locator('input').fill('smtp-fail.test');
+    await page.getByTestId('account-smtp-host').fill('smtp-fail.test');
     await page.getByRole('button', { name: 'Test Connection' }).click();
-    await expect(page.getByText('连接失败')).toBeVisible();
+    await expect(page.getByText('SMTP connection failed')).toBeVisible();
     await expect(page.locator(`[data-testid="account-item-${email}"]`)).toHaveCount(0);
   });
 
@@ -76,19 +79,22 @@ test.describe('Account Access & Switching', () => {
     await page.getByRole('button', { name: 'Create Account' }).click();
     await expect(page.getByTestId(`account-item-${newEmail}`)).toBeVisible();
     await page.getByRole('button', { name: 'Close' }).click();
-    await expect(page.getByRole('heading', { name: 'Settings' })).toBeHidden();
+    await expect(page.getByTestId('settings-modal')).toHaveCount(0);
 
+    await page.reload();
+    await page.waitForSelector('aside');
+    await page.getByTestId('folder-inbox').waitFor();
     const inboxBadge = page.getByTestId('badge-inbox');
     await expect(inboxBadge).toHaveText('95');
     await page.getByTestId('folder-sent').click();
-    await expect(page.locator('h2')).toContainText('Sent');
+    await expect(page.getByTestId('folder-sent')).toHaveClass(/bg-nexus-primary/);
 
     const newAccountButton = page.locator(`button[title="${newEmail}"]`);
     await expect(newAccountButton).toBeVisible();
     await newAccountButton.click();
     await expect(newAccountButton).toHaveClass(/ring-nexus-accent/);
     await expect(inboxBadge).toHaveText('12');
-    await expect(page.locator('h2')).toContainText('Inbox');
+    await expect(page.getByTestId('folder-inbox')).toHaveClass(/bg-nexus-primary/);
 
     const demoAccountButton = page.locator('button[title="demo@nexus-mail.com"]');
     await demoAccountButton.click();

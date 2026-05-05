@@ -18,7 +18,7 @@ test.describe('Interactions and Validations', () => {
     // 3. Verify Error message appears in the modal
     const errorMsg = page.getByTestId('compose-error');
     await expect(errorMsg).toBeVisible();
-    await expect(errorMsg).toHaveText(/Please fill in recipient, subject, and body/);
+    await expect(errorMsg).toHaveText(/Please fill in recipient and body/);
 
     // 4. Input something and click send again - verify it still shows error if other field missing
     await page.locator('input[placeholder="recipient@example.com"]').fill('bob@example.com');

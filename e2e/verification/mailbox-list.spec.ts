@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { applyMockConfig } from '../helpers/mockConfig';
+import { setMockAccounts, setMockUnifiedInbox } from '../helpers/mockData';
 import { testIds } from '../helpers/testIds';
 
 test.describe('Mailbox list verification', () => {
@@ -111,6 +112,99 @@ test.describe('Mailbox list verification', () => {
       const subject = await heading.innerText();
       await page.getByRole('button', { name: 'Refresh' }).click();
       await expect(page.getByTestId(testIds.emptyStateSearchEmpty)).toBeVisible();
+      await expect(heading).toHaveText(subject);
+    });
+  });
+
+  test('LIST-E2E-09 unified inbox renders multi-account', async ({ page }) => {
+    await test.step('Seed unified inbox data', async () => {
+      await setMockAccounts(page, [
+        {
+          id: 'demo-id',
+          email: 'demo@nexus-mail.com',
+          display_name: 'Demo User',
+          imap_host: 'localhost',
+          imap_port: 993,
+          imap_use_tls: true,
+          smtp_host: 'localhost',
+          smtp_port: 465,
+          smtp_use_tls: true,
+          sync_enabled: true,
+          sync_interval: 15,
+          last_sync: null,
+          status: 'normal',
+          last_error: null,
+        },
+        {
+          id: 'alt-id',
+          email: 'alt@nexus-mail.com',
+          display_name: 'Alt User',
+          imap_host: 'localhost',
+          imap_port: 993,
+          imap_use_tls: true,
+          smtp_host: 'localhost',
+          smtp_port: 465,
+          smtp_use_tls: true,
+          sync_enabled: true,
+          sync_interval: 15,
+          last_sync: null,
+          status: 'normal',
+          last_error: null,
+        },
+      ]);
+      await setMockUnifiedInbox(page, [
+        {
+          id: 'unified-1',
+          uid: '200',
+          account_id: 'demo-id',
+          account_email: 'demo@nexus-mail.com',
+          folder_id: 'demo@nexus-mail.com::inbox',
+          folder_name: 'Inbox',
+          subject: 'Demo unified mail',
+          from: 'alerts@demo.com',
+          date: '2024-03-01T10:00:00Z',
+          snippet: 'Demo unified snippet',
+          flags: [],
+        },
+        {
+          id: 'unified-2',
+          uid: '201',
+          account_id: 'alt-id',
+          account_email: 'alt@nexus-mail.com',
+          folder_id: 'alt@nexus-mail.com::inbox',
+          folder_name: 'Inbox',
+          subject: 'Alt unified mail',
+          from: 'alerts@alt.com',
+          date: '2024-03-01T09:00:00Z',
+          snippet: 'Alt unified snippet',
+          flags: ['\\Seen'],
+        },
+      ]);
+      await page.goto('/');
+    });
+    await test.step('Open unified inbox', async () => {
+      await page.getByTestId(testIds.unifiedInboxNav).click();
+      await expect(page.getByTestId(testIds.unifiedInboxView)).toBeVisible();
+      await expect(page.locator('[data-testid^="unified-inbox-item-"]')).toHaveCount(2);
+      const demoItem = page.getByTestId('unified-inbox-item-unified-1');
+      const altItem = page.getByTestId('unified-inbox-item-unified-2');
+      await expect(demoItem.getByText('demo@nexus-mail.com', { exact: true })).toBeVisible();
+      await expect(altItem.getByText('alt@nexus-mail.com', { exact: true })).toBeVisible();
+    });
+  });
+
+  test('LIST-E2E-10 multi-select does not change detail panel', async ({ page }) => {
+    await test.step('Open detail for first email', async () => {
+      await page.goto('/');
+      await page.getByTestId('email-card-100').click();
+    });
+    await test.step('Select another email without changing detail', async () => {
+      const heading = page.locator('main > header h1');
+      const subject = await heading.innerText();
+      await page.evaluate(() => {
+        document.querySelector<HTMLDivElement>('[data-testid="email-select-99"]')?.click();
+      });
+      await expect(page.getByTestId(testIds.selectedCount)).toContainText('1 selected');
       await expect(heading).toHaveText(subject);
     });
   });

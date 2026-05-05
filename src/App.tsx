@@ -4,12 +4,15 @@ import { useMailbox, Email } from "./hooks/useMailbox";
 import { Sidebar } from "./components/layout/Sidebar";
 import { ShortcutsModal } from "./components/layout/ShortcutsModal";
 import { EmailList } from "./components/mail/EmailList";
+import { SmartInbox } from "./components/mail/SmartInbox";
+import { UnifiedInbox } from "./components/mail/UnifiedInbox";
 import { EmailDetail } from "./components/mail/EmailDetail";
 import { Badge } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
 import { ComposeModal } from "./components/mail/ComposeModal";
 import { SettingsModal } from "./components/settings/SettingsModal";
 import { useSettings } from "./hooks/useSettings";
+import { useUnifiedInbox } from "./hooks/useUnifiedInbox";
 import { invoke } from "./lib/tauri";
 import "./App.css";
 
@@ -33,7 +36,9 @@ const App: React.FC = () => {
     [accounts, selectedAccount]
   );
   const selectedAccountEmail = selectedAccountInfo?.email ?? null;
+  const accountIds = React.useMemo(() => accounts.map((account) => account.id), [accounts]);
 
+  const { settings } = useSettings();
   const {
     folders,
     emails,
@@ -56,6 +61,13 @@ const App: React.FC = () => {
     clearSearchHistory,
     searchMetrics,
     resetSearchMetrics,
+    smartInboxSummary,
+    smartInboxGroups,
+    smartInboxLoading,
+    smartInboxError,
+    refreshSmartInboxSummary,
+    refreshSmartInboxGroups,
+    setSmartInboxOverride,
     createFolder,
     renameFolder,
     deleteFolder,
@@ -64,10 +76,25 @@ const App: React.FC = () => {
     moveEmailsWithUndo,
     deleteEmailsWithUndo,
     refreshEmails,
-  } = useMailbox(selectedAccountEmail);
-  const { settings } = useSettings();
+  } = useMailbox(selectedAccountEmail, settings.search_history_limit);
+  const {
+    items: unifiedInboxItems,
+    loading: unifiedInboxLoading,
+    error: unifiedInboxError,
+    refreshUnifiedInbox,
+    searchQuery: globalSearchQuery,
+    setSearchQuery: setGlobalSearchQuery,
+    searchResults: globalSearchResults,
+    searchState: globalSearchState,
+    searchError: globalSearchError,
+    searchFilters: globalSearchFilters,
+    setSearchFilters: setGlobalSearchFilters,
+    updateItem: updateUnifiedItem,
+    removeItem: removeUnifiedItem,
+  } = useUnifiedInbox();
 
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
+  const [viewMode, setViewMode] = useState<"folder" | "smart_inbox" | "unified_inbox">("folder");
   const [composePreset, setComposePreset] = useState<ComposePreset | undefined>(undefined);
   const [detailStatus, setDetailStatus] = useState<{ state: "idle" | "loading" | "error"; message?: string }>({ state: "idle" });
   const [sessionAccountIssues, setSessionAccountIssues] = useState<Record<string, { state: "error"; message?: string }>>({});
@@ -122,11 +149,20 @@ const App: React.FC = () => {
     setSelectedEmail(null);
     setDetailStatus({ state: "idle" });
   }, [selectedFolderId]);
+
+  const unifiedActiveList = React.useMemo(
+    () => (globalSearchQuery.trim().length > 0 ? globalSearchResults : unifiedInboxItems),
+    [globalSearchQuery, globalSearchResults, unifiedInboxItems],
+  );
+  const activeEmails = viewMode === "unified_inbox" ? unifiedActiveList : emails;
+  const activeSearchQuery = viewMode === "unified_inbox" ? globalSearchQuery : searchQuery;
   
   // Sync selectedEmail with the emails array if it was updated by pre-fetch
   const effectiveEmail = React.useMemo(() => {
     if (!selectedEmail) return null;
-    const listEmail = emails.find(e => e.uid === selectedEmail.uid);
+    const listEmail = activeEmails.find((email) =>
+      selectedEmail.id ? email.id === selectedEmail.id : email.uid === selectedEmail.uid,
+    );
     if (!listEmail) return selectedEmail;
     const hasDetails = Boolean(
       selectedEmail.body_html ||
@@ -134,33 +170,133 @@ const App: React.FC = () => {
       (selectedEmail.attachments && selectedEmail.attachments.length > 0)
     );
     return hasDetails ? { ...listEmail, ...selectedEmail } : listEmail;
-  }, [emails, selectedEmail]);
+  }, [activeEmails, selectedEmail]);
 
-  const selectEmail = React.useCallback((email: Email) => {
-    setSelectedEmail(email);
-    const isUnread = !email.flags?.includes("\\Seen");
-    if (isUnread) {
-      markAsRead(email.uid, true);
-    }
-  }, [markAsRead]);
+  const resolveEmailContext = React.useCallback(
+    (email?: Email | null) => ({
+      accountEmail: email?.account_email ?? selectedAccountEmail,
+      folderId: email?.folder_id ?? selectedFolderId,
+    }),
+    [selectedAccountEmail, selectedFolderId],
+  );
+
+  const matchesUnifiedItem = React.useCallback((item: Email, email: Email) => {
+    if (!email.account_email || !email.folder_id) return false;
+    if (email.id && item.id) return item.id === email.id;
+    return (
+      item.uid === email.uid &&
+      item.account_email === email.account_email &&
+      item.folder_id === email.folder_id
+    );
+  }, []);
+
+  const updateUnifiedFlags = React.useCallback(
+    (email: Email, nextFlags: string[]) => {
+      updateUnifiedItem(
+        (item) => matchesUnifiedItem(item, email),
+        (item) => ({ ...item, flags: nextFlags }),
+      );
+      setSelectedEmail((prev) =>
+        prev && matchesUnifiedItem(prev, email) ? { ...prev, flags: nextFlags } : prev,
+      );
+    },
+    [matchesUnifiedItem, updateUnifiedItem],
+  );
+
+  const markAsReadForEmail = React.useCallback(
+    async (email: Email, seen: boolean) => {
+      if (viewMode !== "unified_inbox" || !email.account_email || !email.folder_id) {
+        await markAsRead(email.uid, seen);
+        return;
+      }
+      const { accountEmail, folderId } = resolveEmailContext(email);
+      if (!accountEmail || !folderId) return;
+      const currentFlags = email.flags ?? [];
+      const hasSeen = currentFlags.includes("\\Seen");
+      if (seen === hasSeen) return;
+      const nextFlags = seen
+        ? [...currentFlags, "\\Seen"]
+        : currentFlags.filter((flag) => flag !== "\\Seen");
+      updateUnifiedFlags(email, nextFlags);
+      try {
+        await invoke("update_email_flag", {
+          accountEmail,
+          folderId,
+          uid: email.uid,
+          flag: "\\Seen",
+          value: seen,
+        });
+      } catch (e) {
+        console.error("Unified inbox mark read failed", e);
+      }
+    },
+    [markAsRead, resolveEmailContext, updateUnifiedFlags, viewMode],
+  );
+
+  const selectEmail = React.useCallback(
+    (email: Email) => {
+      setSelectedEmail(email);
+      const isUnread = !email.flags?.includes("\\Seen");
+      if (isUnread) {
+        void markAsReadForEmail(email, true);
+      }
+    },
+    [markAsReadForEmail],
+  );
+
+  const fetchEmailDetailsForEmail = React.useCallback(
+    async (email: Email): Promise<Email> => {
+      const { accountEmail, folderId } = resolveEmailContext(email);
+      if (!accountEmail || !folderId) throw new Error("Missing context");
+      if (viewMode !== "unified_inbox") {
+        return fetchEmailDetails(email.uid);
+      }
+      const details: any = await invoke("get_email_details", {
+        accountEmail,
+        folderId,
+        uid: email.uid,
+      });
+      const { body_html, body_text, attachments, flags } = details;
+      return {
+        uid: email.uid,
+        body_html,
+        body_text,
+        attachments,
+        flags,
+      } as Email;
+    },
+    [fetchEmailDetails, resolveEmailContext, viewMode],
+  );
 
   const navigateEmail = React.useCallback((direction: "next" | "prev") => {
-    if (emails.length === 0) return;
+    if (activeEmails.length === 0) return;
     const currentIndex = effectiveEmail
-      ? emails.findIndex(item => item.uid === effectiveEmail.uid)
+      ? activeEmails.findIndex(item => item.uid === effectiveEmail.uid)
       : -1;
     const nextIndex = direction === "next"
-      ? Math.min(emails.length - 1, currentIndex + 1)
+      ? Math.min(activeEmails.length - 1, currentIndex + 1)
       : Math.max(0, currentIndex - 1);
-    const target = emails[nextIndex >= 0 ? nextIndex : 0];
+    const target = activeEmails[nextIndex >= 0 ? nextIndex : 0];
     if (target) {
       selectEmail(target);
     }
-  }, [emails, effectiveEmail, selectEmail]);
+  }, [activeEmails, effectiveEmail, selectEmail]);
 
   useEffect(() => {
     if (!selectedEmail) return;
-    const listEmail = emails.find(item => item.uid === selectedEmail.uid);
+    const listEmail = activeEmails.find((item) => {
+      if (selectedEmail.id) {
+        return item.id === selectedEmail.id;
+      }
+      if (item.uid !== selectedEmail.uid) return false;
+      if (selectedEmail.account_email || selectedEmail.folder_id) {
+        return (
+          item.account_email === selectedEmail.account_email &&
+          item.folder_id === selectedEmail.folder_id
+        );
+      }
+      return true;
+    });
     if (listEmail) {
       setSelectedEmail((prev) => {
         if (!prev || prev.uid !== listEmail.uid) return prev;
@@ -177,10 +313,10 @@ const App: React.FC = () => {
       });
       return;
     }
-    if (!searchQuery.trim()) {
+    if (!activeSearchQuery.trim()) {
       setSelectedEmail(null);
     }
-  }, [emails, searchQuery, selectedEmail]);
+  }, [activeEmails, activeSearchQuery, selectedEmail]);
   
   // Fetch full details when email is selected
   useEffect(() => {
@@ -194,7 +330,7 @@ const App: React.FC = () => {
       const getDetails = async () => {
         try {
           setDetailStatus({ state: "loading" });
-          const fullEmail = await fetchEmailDetails(uid);
+          const fullEmail = await fetchEmailDetailsForEmail(effectiveEmail);
           if (!isCancelled) {
             setSelectedEmail((prev) => (prev?.uid === uid ? { ...prev, ...fullEmail } : prev));
             setDetailStatus({ state: "idle" });
@@ -216,7 +352,7 @@ const App: React.FC = () => {
     }
     setDetailStatus({ state: "idle" });
     return undefined;
-  }, [effectiveEmail?.uid]);
+  }, [effectiveEmail, fetchEmailDetailsForEmail]);
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [settingsState, setSettingsState] = useState<{ isOpen: boolean, initialTab?: 'general' | 'accounts', initialAction?: 'add_account' }>(() => {
     if (typeof window === "undefined") return { isOpen: false };
@@ -421,6 +557,61 @@ const App: React.FC = () => {
     }
   }, [clearAccountIssue, confirmDelete, deleteEmailsWithUndo, effectiveEmail, recordAccountIssue, selectedEmail, showUndoToast]);
 
+  const deleteUnifiedEmail = React.useCallback(
+    async (email: Email) => {
+      const { accountEmail, folderId } = resolveEmailContext(email);
+      if (!accountEmail || !folderId) return false;
+      if (!confirmDelete(1)) return false;
+      try {
+        await invoke("delete_email", { accountEmail, folderId, uid: email.uid });
+        removeUnifiedItem((item) => matchesUnifiedItem(item, email));
+        if (selectedEmail && matchesUnifiedItem(selectedEmail, email)) {
+          setSelectedEmail(null);
+        }
+        clearAccountIssue();
+        return true;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        recordAccountIssue(message);
+        return false;
+      }
+    },
+    [
+      clearAccountIssue,
+      confirmDelete,
+      matchesUnifiedItem,
+      recordAccountIssue,
+      removeUnifiedItem,
+      resolveEmailContext,
+      selectedEmail,
+    ],
+  );
+
+  const toggleUnifiedFlag = React.useCallback(
+    async (email: Email, currentFlags: string[]) => {
+      const { accountEmail, folderId } = resolveEmailContext(email);
+      if (!accountEmail || !folderId) return;
+      const isFlagged = currentFlags.includes("\\Flagged");
+      const nextFlags = isFlagged
+        ? currentFlags.filter((flag) => flag !== "\\Flagged")
+        : [...currentFlags, "\\Flagged"];
+      updateUnifiedFlags(email, nextFlags);
+      try {
+        await invoke("update_email_flag", {
+          accountEmail,
+          folderId,
+          uid: email.uid,
+          flag: "\\Flagged",
+          value: !isFlagged,
+        });
+        clearAccountIssue();
+      } catch (e) {
+        console.error("Unified inbox flag toggle failed", e);
+      }
+    },
+    [clearAccountIssue, resolveEmailContext, updateUnifiedFlags],
+  );
+
   const handleDeleteSelected = React.useCallback(async () => {
     if (!effectiveEmail) return false;
     return deleteWithConfirmation([effectiveEmail.uid], { reportDetailError: true });
@@ -445,12 +636,18 @@ const App: React.FC = () => {
 
   const focusSearchInput = React.useCallback(() => {
     if (typeof document === "undefined") return;
-    const input = document.querySelector<HTMLInputElement>('[data-testid="search-input"]');
+    const selectors =
+      viewMode === "unified_inbox"
+        ? ['[data-testid="global-search-input"]', '[data-testid="search-input"]']
+        : ['[data-testid="search-input"]', '[data-testid="global-search-input"]'];
+    const input = selectors
+      .map((selector) => document.querySelector<HTMLInputElement>(selector))
+      .find(Boolean);
     if (input) {
       input.focus();
       input.select();
     }
-  }, []);
+  }, [viewMode]);
 
   const isEditableTarget = (target: EventTarget | null) => {
     if (!(target instanceof HTMLElement)) return false;
@@ -464,9 +661,10 @@ const App: React.FC = () => {
         const key = event.key.toLowerCase();
         const isEditable = isEditableTarget(event.target);
         const isShortcutToggle = key === "?" || (key === "/" && event.shiftKey);
+        const isSettingsShortcut = key === "," || event.code === "Comma";
         const allowWhileEditing =
           (!modKey && isShortcutToggle) ||
-          (modKey && (key === "n" || key === "k" || key === "," || (key === "s" && event.shiftKey)));
+          (modKey && (key === "n" || key === "k" || isSettingsShortcut || (key === "s" && event.shiftKey)));
         if (isShortcutMapOpen) {
           if (key === "escape" || isShortcutToggle) {
             event.preventDefault();
@@ -485,10 +683,10 @@ const App: React.FC = () => {
         event.preventDefault();
         focusSearchInput();
       }
-      if (modKey && key === ",") {
-        event.preventDefault();
-        setSettingsState({ isOpen: true, initialTab: 'general' });
-      }
+        if (modKey && isSettingsShortcut) {
+          event.preventDefault();
+          setSettingsState({ isOpen: true, initialTab: 'general' });
+        }
       if (modKey && key === "s" && event.shiftKey) {
         event.preventDefault();
         handleSync();
@@ -529,6 +727,11 @@ const App: React.FC = () => {
   }, [effectiveEmail, focusSearchInput, handleArchiveSelected, handleDeleteSelected, handleSync, handleToggleReadSelected, isComposeOpen, isShortcutMapOpen, navigateEmail, openReply, settingsState.isOpen]);
 
   const currentFolder = folders.find(f => f.id === selectedFolderId);
+  const detailContext = resolveEmailContext(effectiveEmail);
+  const smartInboxUnread = React.useMemo(
+    () => smartInboxGroups.reduce((sum, group) => sum + group.unread_count, 0),
+    [smartInboxGroups],
+  );
   const lastSyncAt =
     (selectedAccount ? sessionLastSyncByAccount[selectedAccount] : undefined) ??
     selectedAccountInfo?.last_sync ??
@@ -551,6 +754,69 @@ const App: React.FC = () => {
     }
     return null;
   }, [selectedAccountInfo, syncStatus, syncing]);
+
+  const globalSearchAccountOptions = React.useMemo(
+    () =>
+      accounts.map((account) => ({
+        id: account.id,
+        label: account.email,
+      })),
+    [accounts],
+  );
+
+  const globalSearchFolderOptions = React.useMemo(() => {
+    const source =
+      globalSearchQuery.trim().length > 0 ? globalSearchResults : unifiedInboxItems;
+    const seen = new Map<string, string>();
+    source.forEach((item) => {
+      if (!seen.has(item.folder_id)) {
+        seen.set(item.folder_id, `${item.folder_name} · ${item.account_email}`);
+      }
+    });
+    return Array.from(seen.entries()).map(([id, label]) => ({ id, label }));
+  }, [globalSearchQuery, globalSearchResults, unifiedInboxItems]);
+
+  useEffect(() => {
+    const accountIds = new Set(globalSearchAccountOptions.map((option) => option.id));
+    const folderIds = new Set(globalSearchFolderOptions.map((option) => option.id));
+    let nextFilters = globalSearchFilters;
+    let changed = false;
+
+    if (globalSearchFilters.account_ids?.length) {
+      const validAccounts = globalSearchFilters.account_ids.filter((id) =>
+        accountIds.has(id),
+      );
+      if (validAccounts.length !== globalSearchFilters.account_ids.length) {
+        nextFilters = {
+          ...nextFilters,
+          account_ids: validAccounts.length > 0 ? validAccounts : undefined,
+        };
+        changed = true;
+      }
+    }
+
+    if (globalSearchFilters.folder_ids?.length) {
+      const validFolders = globalSearchFilters.folder_ids.filter((id) =>
+        folderIds.has(id),
+      );
+      if (validFolders.length !== globalSearchFilters.folder_ids.length) {
+        nextFilters = {
+          ...nextFilters,
+          folder_ids: validFolders.length > 0 ? validFolders : undefined,
+        };
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      setGlobalSearchFilters(nextFilters);
+    }
+  }, [
+    globalSearchAccountOptions,
+    globalSearchFolderOptions,
+    globalSearchFilters,
+    setGlobalSearchFilters,
+  ]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || typeof window === "undefined") return;
@@ -632,6 +898,34 @@ const App: React.FC = () => {
     }
   };
 
+  const handleSmartInboxSelect = React.useCallback(() => {
+    setViewMode("smart_inbox");
+    setSelectedEmail(null);
+    setDetailStatus({ state: "idle" });
+    refreshSmartInboxSummary();
+    refreshSmartInboxGroups();
+  }, [refreshSmartInboxGroups, refreshSmartInboxSummary]);
+
+  const handleUnifiedInboxSelect = React.useCallback(() => {
+    setViewMode("unified_inbox");
+    setSelectedEmail(null);
+    setDetailStatus({ state: "idle" });
+    refreshUnifiedInbox(accountIds);
+  }, [accountIds, refreshUnifiedInbox]);
+
+  const handleFolderSelect = React.useCallback(
+    (folderId: string) => {
+      setViewMode("folder");
+      setSelectedFolderId(folderId);
+    },
+    [setSelectedFolderId],
+  );
+
+  useEffect(() => {
+    if (viewMode !== "unified_inbox") return;
+    refreshUnifiedInbox(accountIds);
+  }, [accountIds, refreshUnifiedInbox, viewMode]);
+
   return (
     <div className="flex h-screen w-full bg-nexus-background overflow-hidden text-nexus-foreground">
       {/* Toast Notification */}
@@ -681,7 +975,12 @@ const App: React.FC = () => {
         folders={folders}
         isFolderLoading={foldersLoading}
         selectedFolderId={selectedFolderId}
-        onFolderSelect={setSelectedFolderId}
+        onFolderSelect={handleFolderSelect}
+        onUnifiedInboxSelect={handleUnifiedInboxSelect}
+        unifiedInboxActive={viewMode === "unified_inbox"}
+        onSmartInboxSelect={handleSmartInboxSelect}
+        smartInboxActive={viewMode === "smart_inbox"}
+        smartInboxUnread={smartInboxUnread}
         onSync={handleSync}
         isSyncing={syncing}
         mailboxStatus={mailboxStatus}
@@ -726,98 +1025,139 @@ const App: React.FC = () => {
         onFolderDrop={handleFolderDrop}
       />
 
-      <EmailList 
-        emails={emails}
-        selectedEmailId={effectiveEmail?.uid || null}
-        onEmailSelect={selectEmail}
-        folderName={currentFolder?.name || "Inbox"}
-        hasAccounts={accounts.length > 0}
-        mailboxStatus={mailboxStatus}
-        lastSyncAt={lastSyncAt}
-        isLoading={emailsLoading}
-        isFolderLoading={foldersLoading}
-        loadError={loadError}
-        hasFolder={Boolean(selectedFolderId)}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        searchFilters={searchFilters}
-        onSearchFiltersChange={setSearchFilters}
-        searchHistory={searchHistory}
-        onClearSearchHistory={clearSearchHistory}
-        folders={folders}
-        currentFolderId={selectedFolderId}
-        onApplyEmailAction={async (uids, action) => {
-          try {
-            const previousSelected = selectedEmail;
-            if (action === "mark_read" || action === "mark_unread") {
-              const rollback = await applyEmailActionWithUndo(uids, action);
+      {viewMode === "smart_inbox" ? (
+        <SmartInbox
+          summary={smartInboxSummary}
+          groups={smartInboxGroups}
+          isLoading={smartInboxLoading}
+          error={smartInboxError}
+          onRefresh={() => {
+            refreshSmartInboxSummary();
+            refreshSmartInboxGroups();
+          }}
+          onOverride={async (item, category, reason) => {
+            try {
+              await setSmartInboxOverride(item.id, category, reason);
+              clearAccountIssue();
+            } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              recordAccountIssue(message);
+              throw e;
+            }
+          }}
+        />
+      ) : viewMode === "unified_inbox" ? (
+        <UnifiedInbox
+          items={unifiedInboxItems}
+          isLoading={unifiedInboxLoading}
+          error={unifiedInboxError}
+          searchQuery={globalSearchQuery}
+          onSearchQueryChange={setGlobalSearchQuery}
+          searchResults={globalSearchResults}
+          searchState={globalSearchState}
+          searchError={globalSearchError}
+          searchFilters={globalSearchFilters}
+          onSearchFiltersChange={setGlobalSearchFilters}
+          accountOptions={globalSearchAccountOptions}
+          folderOptions={globalSearchFolderOptions}
+          selectedEmailKey={effectiveEmail?.id || null}
+          onSelectEmail={selectEmail}
+          onRefresh={() => refreshUnifiedInbox(accountIds)}
+        />
+      ) : (
+        <EmailList 
+          emails={emails}
+          selectedEmailId={effectiveEmail?.uid || null}
+          onEmailSelect={selectEmail}
+          folderName={currentFolder?.name || "Inbox"}
+          hasAccounts={accounts.length > 0}
+          mailboxStatus={mailboxStatus}
+          lastSyncAt={lastSyncAt}
+          isLoading={emailsLoading}
+          isFolderLoading={foldersLoading}
+          loadError={loadError}
+          hasFolder={Boolean(selectedFolderId)}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          searchFilters={searchFilters}
+          onSearchFiltersChange={setSearchFilters}
+          searchHistory={searchHistory}
+          onClearSearchHistory={clearSearchHistory}
+          folders={folders}
+          currentFolderId={selectedFolderId}
+          onApplyEmailAction={async (uids, action) => {
+            try {
+              const previousSelected = selectedEmail;
+              if (action === "mark_read" || action === "mark_unread") {
+                const rollback = await applyEmailActionWithUndo(uids, action);
+                if (rollback) {
+                  showUndoToast(`${uids.length} marked ${action === "mark_read" ? "read" : "unread"}`, () => {
+                    rollback();
+                    if (previousSelected) {
+                      setSelectedEmail(previousSelected);
+                    }
+                  });
+                }
+              } else {
+                await applyEmailAction(uids, action);
+              }
+              if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
+                if (action === "mark_read") {
+                  const flags = effectiveEmail.flags ?? [];
+                  if (!flags.includes("\\Seen")) {
+                    setSelectedEmail({ ...effectiveEmail, flags: [...flags, "\\Seen"] });
+                  }
+                }
+                if (action === "mark_unread") {
+                  const flags = effectiveEmail.flags ?? [];
+                  if (flags.includes("\\Seen")) {
+                    setSelectedEmail({ ...effectiveEmail, flags: flags.filter(flag => flag !== "\\Seen") });
+                  }
+                }
+              }
+              clearAccountIssue();
+            } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              recordAccountIssue(message);
+              throw e;
+            }
+          }}
+          onMoveEmails={async (uids, targetFolderId) => {
+            try {
+              const previousSelected = selectedEmail;
+              const rollback = await moveEmailsWithUndo(uids, targetFolderId);
               if (rollback) {
-                showUndoToast(`${uids.length} marked ${action === "mark_read" ? "read" : "unread"}`, () => {
+                showUndoToast(`${uids.length} moved`, () => {
                   rollback();
                   if (previousSelected) {
                     setSelectedEmail(previousSelected);
                   }
                 });
               }
-            } else {
-              await applyEmailAction(uids, action);
+              clearAccountIssue();
+            } catch (e) {
+              const message = e instanceof Error ? e.message : String(e);
+              recordAccountIssue(message);
+              throw e;
             }
-            if (effectiveEmail && uids.includes(effectiveEmail.uid)) {
-              if (action === "mark_read") {
-                const flags = effectiveEmail.flags ?? [];
-                if (!flags.includes("\\Seen")) {
-                  setSelectedEmail({ ...effectiveEmail, flags: [...flags, "\\Seen"] });
-                }
-              }
-              if (action === "mark_unread") {
-                const flags = effectiveEmail.flags ?? [];
-                if (flags.includes("\\Seen")) {
-                  setSelectedEmail({ ...effectiveEmail, flags: flags.filter(flag => flag !== "\\Seen") });
-                }
-              }
-            }
-            clearAccountIssue();
-          } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            recordAccountIssue(message);
-            throw e;
-          }
-        }}
-        onMoveEmails={async (uids, targetFolderId) => {
-          try {
-            const previousSelected = selectedEmail;
-            const rollback = await moveEmailsWithUndo(uids, targetFolderId);
-            if (rollback) {
-              showUndoToast(`${uids.length} moved`, () => {
-                rollback();
-                if (previousSelected) {
-                  setSelectedEmail(previousSelected);
-                }
-              });
-            }
-            clearAccountIssue();
-          } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            recordAccountIssue(message);
-            throw e;
-          }
-        }}
-        onDeleteEmails={(uids) => deleteWithConfirmation(uids)}
-        onLoadMore={loadMore}
-        onAddAccount={() => setSettingsState({ isOpen: true, initialTab: 'accounts', initialAction: 'add_account' })}
-        onRetry={() => refreshEmails()}
-      />
+          }}
+          onDeleteEmails={(uids) => deleteWithConfirmation(uids)}
+          onLoadMore={loadMore}
+          onAddAccount={() => setSettingsState({ isOpen: true, initialTab: 'accounts', initialAction: 'add_account' })}
+          onRetry={() => refreshEmails()}
+        />
+      )}
 
       <EmailDetail 
         email={effectiveEmail}
-        accountEmail={selectedAccountEmail}
-        folderId={selectedFolderId}
+        accountEmail={detailContext.accountEmail}
+        folderId={detailContext.folderId}
         detailStatus={detailStatus}
         onRetryLoad={async () => {
           if (!effectiveEmail) return;
           try {
             setDetailStatus({ state: "loading" });
-            const fullEmail = await fetchEmailDetails(effectiveEmail.uid);
+            const fullEmail = await fetchEmailDetailsForEmail(effectiveEmail);
             setSelectedEmail((prev) => (prev?.uid === effectiveEmail.uid ? { ...prev, ...fullEmail } : prev));
             setDetailStatus({ state: "idle" });
           } catch (e) {
@@ -826,26 +1166,38 @@ const App: React.FC = () => {
             recordAccountIssue(message);
           }
         }}
-        onDelete={(uid: string) => deleteWithConfirmation([uid], { reportDetailError: true })}
-        onToggleFlag={async (uid: string, flags: string[]) => {
-            await toggleFlag(uid, flags);
-            if (selectedEmail?.uid === uid) {
-                const isFlagged = flags.includes("\\Flagged");
-                const newFlags = isFlagged 
-                    ? flags.filter(f => f !== "\\Flagged")
-                    : [...flags, "\\Flagged"];
-                setSelectedEmail({ ...selectedEmail, flags: newFlags });
-            }
+        onDelete={(uid: string) => {
+          if (!effectiveEmail) return Promise.resolve(false);
+          if (viewMode === "unified_inbox") {
+            return deleteUnifiedEmail(effectiveEmail);
+          }
+          return deleteWithConfirmation([uid], { reportDetailError: true });
         }}
-        onMarkAsRead={async (uid: string, seen: boolean) => {
-            await markAsRead(uid, seen);
-            if (selectedEmail?.uid === uid) {
-                const currentFlags = selectedEmail.flags || [];
-                const newFlags = seen 
-                    ? (currentFlags.includes("\\Seen") ? (currentFlags as string[]) : [...(currentFlags as string[]), "\\Seen"])
-                    : (currentFlags as string[]).filter(f => f !== "\\Seen");
-                setSelectedEmail({ ...selectedEmail, flags: newFlags });
-            }
+        onToggleFlag={async (_uid: string, flags: string[]) => {
+          if (!effectiveEmail) return;
+          if (viewMode === "unified_inbox") {
+            await toggleUnifiedFlag(effectiveEmail, flags);
+            return;
+          }
+          await toggleFlag(effectiveEmail.uid, flags);
+          if (selectedEmail?.uid === effectiveEmail.uid) {
+            const isFlagged = flags.includes("\\Flagged");
+            const newFlags = isFlagged
+              ? flags.filter((f) => f !== "\\Flagged")
+              : [...flags, "\\Flagged"];
+            setSelectedEmail({ ...selectedEmail, flags: newFlags });
+          }
+        }}
+        onMarkAsRead={async (_uid: string, seen: boolean) => {
+          if (!effectiveEmail) return;
+          await markAsReadForEmail(effectiveEmail, seen);
+          if (viewMode !== "unified_inbox" && selectedEmail?.uid === effectiveEmail.uid) {
+            const currentFlags = selectedEmail.flags || [];
+            const newFlags = seen
+              ? (currentFlags.includes("\\Seen") ? currentFlags : [...currentFlags, "\\Seen"])
+              : currentFlags.filter((f) => f !== "\\Seen");
+            setSelectedEmail({ ...selectedEmail, flags: newFlags });
+          }
         }}
         onReply={openReply}
         onForward={openForward}

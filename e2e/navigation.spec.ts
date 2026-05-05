@@ -9,14 +9,14 @@ test.describe('Navigation Flow', () => {
 
   test('should switch folders and update email list', async ({ page }) => {
     // 1. Inbox should be selected by default
-    await expect(page.locator('h2')).toContainText('Inbox');
+    await expect(page.getByTestId('folder-inbox')).toHaveClass(/bg-nexus-primary/);
     
     // 2. Click "Sent" folder
     // Note: data-testid="folder-sent" or similar
     await page.getByTestId('folder-sent').click();
     
     // 3. Header should update
-    await expect(page.locator('h2')).toContainText('Sent');
+    await expect(page.getByTestId('folder-sent')).toHaveClass(/bg-nexus-primary/);
   });
 
   test('should handle account switching', async ({ page }) => {

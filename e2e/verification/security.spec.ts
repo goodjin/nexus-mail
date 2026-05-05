@@ -2,7 +2,9 @@ import { test, expect } from '@playwright/test';
 import { testIds } from '../helpers/testIds';
 
 const openAccountSettings = async (page: import('@playwright/test').Page) => {
-  await page.getByTestId('open-settings').click();
+  await page.evaluate(() => localStorage.setItem('nexus-test-open-settings', 'accounts'));
+  await page.reload();
+  await page.getByTestId('settings-modal').waitFor();
   await page.getByRole('button', { name: 'Accounts' }).click();
   const accountItem = page.getByTestId('account-item-demo@nexus-mail.com');
   await accountItem.waitFor();

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { applyMockConfig } from '../helpers/mockConfig';
-import { setMockAccounts } from '../helpers/mockData';
+import { setMockAccounts, setMockUnifiedInbox } from '../helpers/mockData';
 import { testIds } from '../helpers/testIds';
 
 test.describe('Search verification', () => {
@@ -135,9 +135,105 @@ test.describe('Search verification', () => {
     });
     await test.step('Assert history captures last query only', async () => {
       await page.waitForFunction(() => (window as any).__nexusTest.getSearchMetrics().samples.length > 0);
-      const history = await page.evaluate(() => (window as any).__nexusTest.getSearchHistory());
-      expect(history.length).toBeGreaterThan(0);
-      expect(history[0].query).toBe('debounce');
+      await expect.poll(async () => {
+        const history = await page.evaluate(() => (window as any).__nexusTest.getSearchHistory());
+        return history[0]?.query ?? '';
+      }).toBe('debounce');
+    });
+  });
+
+  test('SRCH-E2E-08 global search filters by account and folder', async ({ page }) => {
+    await test.step('Seed unified inbox search data', async () => {
+      await setMockAccounts(page, [
+        {
+          id: 'demo-id',
+          email: 'demo@nexus-mail.com',
+          display_name: 'Demo User',
+          imap_host: 'localhost',
+          imap_port: 993,
+          imap_use_tls: true,
+          smtp_host: 'localhost',
+          smtp_port: 465,
+          smtp_use_tls: true,
+          sync_enabled: true,
+          sync_interval: 15,
+          last_sync: null,
+          status: 'normal',
+          last_error: null,
+        },
+        {
+          id: 'alt-id',
+          email: 'alt@nexus-mail.com',
+          display_name: 'Alt User',
+          imap_host: 'localhost',
+          imap_port: 993,
+          imap_use_tls: true,
+          smtp_host: 'localhost',
+          smtp_port: 465,
+          smtp_use_tls: true,
+          sync_enabled: true,
+          sync_interval: 15,
+          last_sync: null,
+          status: 'normal',
+          last_error: null,
+        },
+      ]);
+      await setMockUnifiedInbox(page, [
+        {
+          id: 'global-1',
+          uid: '300',
+          account_id: 'demo-id',
+          account_email: 'demo@nexus-mail.com',
+          folder_id: 'demo@nexus-mail.com::inbox',
+          folder_name: 'Inbox',
+          subject: 'Quarterly Report',
+          from: 'finance@demo.com',
+          date: '2024-03-02T10:00:00Z',
+          snippet: 'Report ready',
+          flags: [],
+        },
+        {
+          id: 'global-2',
+          uid: '301',
+          account_id: 'demo-id',
+          account_email: 'demo@nexus-mail.com',
+          folder_id: 'demo@nexus-mail.com::sent',
+          folder_name: 'Sent',
+          subject: 'Quarterly Report Follow-up',
+          from: 'me@demo.com',
+          date: '2024-03-02T09:00:00Z',
+          snippet: 'Sent report recap',
+          flags: [],
+        },
+        {
+          id: 'global-3',
+          uid: '400',
+          account_id: 'alt-id',
+          account_email: 'alt@nexus-mail.com',
+          folder_id: 'alt@nexus-mail.com::inbox',
+          folder_name: 'Inbox',
+          subject: 'Quarterly Report',
+          from: 'finance@alt.com',
+          date: '2024-03-02T08:00:00Z',
+          snippet: 'Alt report ready',
+          flags: ['\\Seen'],
+        },
+      ]);
+      await page.goto('/');
+    });
+    await test.step('Run global search', async () => {
+      await page.getByTestId(testIds.unifiedInboxNav).click();
+      await page.getByTestId(testIds.globalSearchInput).fill('Report');
+      await expect(page.locator('[data-testid^="global-search-item-"]').first()).toBeVisible();
+      await expect(page.locator('[data-testid^="global-search-item-"]')).toHaveCount(3);
+    });
+    await test.step('Filter by account then folder', async () => {
+      await page.getByTestId(testIds.globalSearchAccountFilter).selectOption('demo-id');
+      await expect(page.locator('[data-testid^="global-search-item-"]')).toHaveCount(2);
+      await page.getByTestId(testIds.globalSearchFolderFilter).selectOption('demo@nexus-mail.com::sent');
+      await expect(page.locator('[data-testid^="global-search-item-"]')).toHaveCount(1);
+      const filteredItem = page.locator('[data-testid^="global-search-item-"]').first();
+      await expect(filteredItem.getByText('Sent', { exact: true })).toBeVisible();
     });
   });
 });

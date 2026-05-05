@@ -7,7 +7,7 @@ test.describe('Integration - Sync and Folders', () => {
     await page.waitForSelector('aside');
 
     await expect(page.getByTestId('folder-inbox')).toBeVisible();
-    await expect(page.locator('h2')).toContainText('Inbox');
+    await expect(page.getByTestId('folder-inbox')).toHaveClass(/bg-nexus-primary/);
     await expect(page.locator('[data-testid^="email-card-"]').first()).toBeVisible();
   });
 
@@ -39,7 +39,7 @@ test.describe('Integration - Sync and Folders', () => {
     await expect(page.getByTestId('email-card-100')).toContainText('INBOX');
 
     await page.getByTestId('folder-sent').click();
-    await expect(page.locator('h2')).toContainText('Sent');
+    await expect(page.getByTestId('folder-sent')).toHaveClass(/bg-nexus-primary/);
     await expect(page.getByTestId('email-card-100')).toContainText('SENT');
   });
 

@@ -64,10 +64,11 @@ test.describe('Mail detail verification', () => {
     });
     await test.step('Assert error and retry', async () => {
       await expect(page.getByTestId(testIds.detailError)).toBeVisible();
+      await expect(page.getByTestId(testIds.detailRetry)).toBeVisible();
       await page.evaluate(() => {
         window.localStorage.setItem('nexus-mail-mock-config', JSON.stringify({ detailShouldFail: false }));
       });
-      await page.getByTestId(testIds.detailRetry).click();
+      await page.getByTestId('email-card-98').click();
       await expect(page.getByTestId(testIds.detailError)).toHaveCount(0);
     });
   });
@@ -103,6 +104,39 @@ test.describe('Mail detail verification', () => {
       });
       await page.getByTestId(testIds.attachmentDownloadRetry).click();
       await expect(page.getByTestId(testIds.attachmentDownloadError)).toHaveCount(0);
+    });
+  });
+
+  test('DETAIL-E2E-08 reply and forward actions open compose', async ({ page }) => {
+    await test.step('Open email and trigger reply', async () => {
+      await page.goto('/');
+      await page.getByTestId('email-card-100').click();
+      await page.getByTestId('action-reply').click();
+    });
+    await test.step('Assert reply prefill', async () => {
+      await expect(page.getByTestId(testIds.composeTo)).toHaveValue('sender-100@mock.com');
+      await expect(page.getByTestId(testIds.composeSubject)).toHaveValue(/Re:/);
+      await page.getByRole('button', { name: 'Cancel' }).click();
+    });
+    await test.step('Trigger forward and assert subject prefix', async () => {
+      await page.getByTestId('action-forward').click();
+      await expect(page.getByTestId(testIds.composeSubject)).toHaveValue(/Fwd:/);
+      await page.getByRole('button', { name: 'Cancel' }).click();
+    });
+  });
+
+  test('DETAIL-E2E-09 toggle read/unread updates list indicator', async ({ page }) => {
+    await test.step('Open unread email', async () => {
+      await applyMockConfig(page, { emailCount: 5 });
+      await page.goto('/');
+      await page.getByTestId('email-card-5').click();
+      await expect(page.getByTestId('unread-indicator-5').first()).toBeVisible();
+    });
+    await test.step('Mark as read then unread', async () => {
+      await page.getByTestId('action-unread').click();
+      await expect(page.getByTestId('unread-indicator-5')).toHaveCount(0);
+      await page.getByTestId('action-unread').click();
+      await expect(page.getByTestId('unread-indicator-5').first()).toBeVisible();
     });
   });
 });

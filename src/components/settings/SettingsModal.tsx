@@ -345,13 +345,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     title, 
     description, 
     value, 
-    onToggle 
+    onToggle,
+    toggleTestId
   }: { 
     icon: any, 
     title: string, 
     description: string, 
     value: boolean, 
-    onToggle: (v: boolean) => void 
+    onToggle: (v: boolean) => void;
+    toggleTestId?: string;
   }) => (
     <div className="flex items-center justify-between p-4 hover:bg-nexus-muted/10 rounded-lg transition-colors">
       <div className="flex items-start gap-4">
@@ -365,6 +367,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
       </div>
       <button 
         onClick={() => onToggle(!value)}
+        data-testid={toggleTestId}
         className={cn(
           "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none",
           value ? "bg-nexus-accent" : "bg-nexus-muted/30"
@@ -527,6 +530,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                       max={50}
                       value={settings.search_history_limit}
                       onChange={(e) => updateSetting('search_history_limit', Math.max(1, Math.min(50, Number.parseInt(e.target.value || '10', 10) || 10)))}
+                      data-testid="settings-search-history-limit"
                       className="w-20 rounded-lg border border-nexus-muted/20 bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 ring-nexus-accent"
                     />
                   </div>
@@ -542,6 +546,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     description="Ask for confirmation before moving messages to trash."
                     value={settings.confirm_before_delete}
                     onToggle={(v) => updateSetting('confirm_before_delete', v)}
+                    toggleTestId="settings-confirm-delete-toggle"
                   />
                   <div className="rounded-lg border border-nexus-muted/20 bg-nexus-muted/5 px-4 py-3">
                     <div className="flex items-start gap-4">
@@ -555,6 +560,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                       <select
                         value={settings.remote_image_policy}
                         onChange={(e) => updateSetting('remote_image_policy', e.target.value as 'always' | 'ask' | 'never')}
+                        data-testid="settings-remote-image-policy"
                         className="rounded-lg border border-nexus-muted/20 bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 ring-nexus-accent"
                       >
                         <option value="ask">Ask</option>
@@ -576,6 +582,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                         value={settings.download_directory}
                         onChange={(e) => updateSetting('download_directory', e.target.value)}
                         placeholder="/Users/you/Downloads"
+                        data-testid="settings-download-directory"
                         className="w-56 rounded-lg border border-nexus-muted/20 bg-transparent px-3 py-2 text-sm outline-none focus:ring-2 ring-nexus-accent"
                       />
                     </div>
@@ -836,6 +843,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                           onClick={handleAutoDiscover}
                           disabled={!editForm?.email || discoveryStatus === 'discovering'}
                           className="px-3 text-xs border border-nexus-muted/20"
+                          data-testid="account-auto-discover"
                         >
                           {discoveryStatus === 'discovering' ? (
                             <span className="flex items-center gap-2">
@@ -846,13 +854,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                         </Button>
                       </div>
                       {discoveryStatus === 'success' && (
-                        <div className="text-xs text-green-600 flex items-center gap-2">
+                        <div className="text-xs text-green-600 flex items-center gap-2" data-testid="account-discovery-success">
                           <CheckCircle2 className="w-3.5 h-3.5" />
                           Auto-discovery applied. Review and save the settings.
                         </div>
                       )}
                       {discoveryStatus === 'error' && discoveryError && (
-                        <div className="text-xs text-red-600 flex items-center gap-2">
+                        <div className="text-xs text-red-600 flex items-center gap-2" data-testid="account-discovery-error">
                           <AlertCircle className="w-3.5 h-3.5" />
                           {discoveryError}
                         </div>

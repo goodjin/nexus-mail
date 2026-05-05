@@ -3,7 +3,7 @@ import { Folder } from "../../hooks/useMailbox";
 import { AccountInfo } from "../../context/AccountContext";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
-import { RefreshCw, Mail, Inbox, Archive, Trash2, Settings, FileText, AlertOctagon, Loader2, FolderPlus, Pencil, X, Keyboard } from "lucide-react";
+import { RefreshCw, Mail, Inbox, Archive, Trash2, Settings, FileText, AlertOctagon, Loader2, FolderPlus, Pencil, X, Keyboard, Sparkles } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 interface SidebarProps {
@@ -15,6 +15,11 @@ interface SidebarProps {
   isFolderLoading: boolean;
   selectedFolderId: string | null;
   onFolderSelect: (id: string) => void;
+  onUnifiedInboxSelect: () => void;
+  unifiedInboxActive: boolean;
+  onSmartInboxSelect: () => void;
+  smartInboxActive: boolean;
+  smartInboxUnread?: number;
   onSync: () => void;
   isSyncing: boolean;
   mailboxStatus?: { type: "loading" | "success" | "error"; message: string } | null;
@@ -38,6 +43,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isFolderLoading,
   selectedFolderId,
   onFolderSelect,
+  onUnifiedInboxSelect,
+  unifiedInboxActive,
+  onSmartInboxSelect,
+  smartInboxActive,
+  smartInboxUnread,
   onSync,
   isSyncing,
   mailboxStatus,
@@ -175,6 +185,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div
                   className="absolute -right-1 -top-1 w-2 h-2 rounded-full bg-red-500"
                   title={issue?.message ?? "Account error"}
+                  data-testid={`account-issue-${acc.id}`}
                 />
               )}
               {/* Tooltip */}
@@ -290,80 +301,117 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {isFolderLoading && folders.length === 0 ? (
             <div className="px-3 py-2 text-[11px] text-nexus-muted">Loading folders...</div>
           ) : (
-            folders.map((folder) => {
-              const Icon = getFolderIcon(folder);
-              const displayName = getLocalizedName(folder);
-              const folderKey = getFolderKey(folder);
-              const isCustomFolder = !folder.system_role;
-              return (
-                <button
-                  key={folder.id}
-                  data-testid={`folder-${folderKey}`}
-                  onClick={() => onFolderSelect(folder.id)}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    setDragOverFolderId(folder.id);
-                  }}
-                  onDragLeave={() => setDragOverFolderId(prev => (prev === folder.id ? null : prev))}
-                  onDrop={(event) => handleDrop(event, folder.id)}
-                  className={cn(
-                    "group w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
-                    selectedFolderId === folder.id 
-                      ? "bg-nexus-primary text-nexus-primary-foreground" 
-                      : "text-nexus-sidebar-foreground hover:bg-nexus-border/50",
-                    dragOverFolderId === folder.id && "bg-nexus-border/70 ring-1 ring-nexus-accent/40"
-                  )}
-                >
-                  <Icon className="w-4 h-4" />
-                  <span className="flex-1 text-left truncate">{displayName}</span>
-                  {isCustomFolder && (
-                    <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        type="button"
-                        title="Rename folder"
-                        data-testid={`folder-rename-${folder.id}`}
-                        className="p-1 rounded hover:bg-nexus-border/60"
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openRenameDialog(folder);
-                        }}
+            <>
+              <button
+                data-testid="unified-inbox-nav"
+                onClick={onUnifiedInboxSelect}
+                className={cn(
+                  "group w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
+                  unifiedInboxActive
+                    ? "bg-nexus-primary text-nexus-primary-foreground"
+                    : "text-nexus-sidebar-foreground hover:bg-nexus-border/50",
+                )}
+              >
+                <Inbox className="w-4 h-4" />
+                <span className="flex-1 text-left truncate">Unified Inbox</span>
+              </button>
+              <button
+                data-testid="smart-inbox-nav"
+                onClick={onSmartInboxSelect}
+                className={cn(
+                  "group w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
+                  smartInboxActive
+                    ? "bg-nexus-primary text-nexus-primary-foreground"
+                    : "text-nexus-sidebar-foreground hover:bg-nexus-border/50",
+                )}
+              >
+                <Sparkles className="w-4 h-4" />
+                <span className="flex-1 text-left truncate">Smart Inbox</span>
+                {smartInboxUnread ? (
+                  <Badge
+                    data-testid="smart-inbox-unread"
+                    variant={smartInboxActive ? "secondary" : "primary"}
+                    className="px-1.5 min-w-[1.25rem] justify-center"
+                  >
+                    {smartInboxUnread}
+                  </Badge>
+                ) : null}
+              </button>
+              {folders.map((folder) => {
+                const Icon = getFolderIcon(folder);
+                const displayName = getLocalizedName(folder);
+                const folderKey = getFolderKey(folder);
+                const isCustomFolder = !folder.system_role;
+                return (
+                  <button
+                    key={folder.id}
+                    data-testid={`folder-${folderKey}`}
+                    onClick={() => onFolderSelect(folder.id)}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      setDragOverFolderId(folder.id);
+                    }}
+                    onDragLeave={() => setDragOverFolderId(prev => (prev === folder.id ? null : prev))}
+                    onDrop={(event) => handleDrop(event, folder.id)}
+                    className={cn(
+                      "group w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-nexus transition-colors",
+                      selectedFolderId === folder.id && !smartInboxActive && !unifiedInboxActive
+                        ? "bg-nexus-primary text-nexus-primary-foreground"
+                        : "text-nexus-sidebar-foreground hover:bg-nexus-border/50",
+                      dragOverFolderId === folder.id && "bg-nexus-border/70 ring-1 ring-nexus-accent/40"
+                    )}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span className="flex-1 text-left truncate">{displayName}</span>
+                    {isCustomFolder && (
+                      <span className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          title="Rename folder"
+                          data-testid={`folder-rename-${folder.id}`}
+                          className="p-1 rounded hover:bg-nexus-border/60"
+                          onMouseDown={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openRenameDialog(folder);
+                          }}
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          title="Delete folder"
+                          data-testid={`folder-delete-${folder.id}`}
+                          className="p-1 rounded hover:bg-nexus-border/60 text-red-500"
+                          onMouseDown={(event) => event.stopPropagation()}
+                          onClick={async (event) => {
+                            event.stopPropagation();
+                            if (!confirm(`Delete "${displayName}"?`)) return;
+                            try {
+                              await onDeleteFolder(folder.id);
+                            } catch (e) {
+                              const message = e instanceof Error ? e.message : String(e);
+                              alert(message);
+                            }
+                          }}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </span>
+                    )}
+                    {folder.unread_count > 0 && (
+                      <Badge 
+                        data-testid={`badge-${folderKey}`}
+                        variant={selectedFolderId === folder.id ? "secondary" : "primary"}
+                        className="px-1.5 min-w-[1.25rem] justify-center"
                       >
-                        <Pencil className="w-3 h-3" />
-                      </button>
-                      <button
-                        type="button"
-                        title="Delete folder"
-                        data-testid={`folder-delete-${folder.id}`}
-                        className="p-1 rounded hover:bg-nexus-border/60 text-red-500"
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onClick={async (event) => {
-                          event.stopPropagation();
-                          if (!confirm(`Delete "${displayName}"?`)) return;
-                          try {
-                            await onDeleteFolder(folder.id);
-                          } catch (e) {
-                            const message = e instanceof Error ? e.message : String(e);
-                            alert(message);
-                          }
-                        }}
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </span>
-                  )}
-                  {folder.unread_count > 0 && (
-                    <Badge 
-                      data-testid={`badge-${folderKey}`}
-                      variant={selectedFolderId === folder.id ? "secondary" : "primary"}
-                      className="px-1.5 min-w-[1.25rem] justify-center"
-                    >
-                      {folder.unread_count}
-                    </Badge>
-                  )}
-                </button>
-              );
-            })
+                        {folder.unread_count}
+                      </Badge>
+                    )}
+                  </button>
+                );
+              })}
+            </>
           )}
         </nav>
       </div>

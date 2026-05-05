@@ -49,7 +49,9 @@ test.describe('Shortcut map & bindings', () => {
     await page.getByTestId('email-card-100').click();
     const heading = page.locator('main > header h1');
     await expect(heading).toContainText('#100');
-    await page.keyboard.press('ArrowDown');
+    await page.evaluate(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' }));
+    });
     await expect(heading).toContainText('#99');
   });
 

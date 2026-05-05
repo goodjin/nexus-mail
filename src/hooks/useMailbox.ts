@@ -10,6 +10,7 @@ export interface Folder {
 }
 
 export interface Email {
+  id?: string;
   uid: string;
   subject: string;
   from: string;
@@ -20,6 +21,10 @@ export interface Email {
   snippet: string;
   body_html?: string;
   body_text?: string;
+  account_id?: string;
+  account_email?: string;
+  folder_id?: string;
+  folder_name?: string;
   attachments?: {
     id: string;
     filename: string;
@@ -28,6 +33,39 @@ export interface Email {
   }[];
   flags?: string[];
 }
+
+export type SmartInboxCategory =
+  | "important"
+  | "personal"
+  | "notifications"
+  | "newsletters"
+  | "low_priority";
+
+export type SmartInboxGroup = {
+  id: string;
+  label: SmartInboxCategory;
+  unread_count: number;
+  latest_at: string;
+};
+
+export type SmartInboxPriorityItem = {
+  id: string;
+  uid: string;
+  account_id: string;
+  folder_id: string;
+  subject: string;
+  from: string;
+  date: string;
+  flags: string[];
+  category: SmartInboxCategory;
+};
+
+export type SmartInboxSummary = {
+  groups: SmartInboxGroup[];
+  priority_items: SmartInboxPriorityItem[];
+};
+
+export type SmartInboxOverrideReason = "user_mark_important" | "user_mark_unimportant";
 
 export type SearchFilters = {
   sender: string;
@@ -79,7 +117,7 @@ const sortFolders = (items: Folder[]) => {
   });
 };
 
-export function useMailbox(accountEmail: string | null) {
+export function useMailbox(accountEmail: string | null, searchHistoryLimit = 10) {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [emails, setEmails] = useState<Email[]>([]);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
@@ -94,10 +132,15 @@ export function useMailbox(accountEmail: string | null) {
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [searchFilters, setSearchFilters] = useState<SearchFilters>(DEFAULT_SEARCH_FILTERS);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryEntry[]>([]);
+  const historyLimit = Math.max(1, searchHistoryLimit || 10);
   const [searchMetrics, setSearchMetrics] = useState<{ lastDurationMs: number | null; samples: number[] }>({
     lastDurationMs: null,
     samples: [],
   });
+  const [smartInboxSummary, setSmartInboxSummary] = useState<SmartInboxSummary | null>(null);
+  const [smartInboxGroups, setSmartInboxGroups] = useState<SmartInboxGroup[]>([]);
+  const [smartInboxLoading, setSmartInboxLoading] = useState(false);
+  const [smartInboxError, setSmartInboxError] = useState<string | null>(null);
   const searchMetricsRef = useRef<number[]>([]);
   const searchRequestId = useRef(0);
   const [searchDebounceMs] = useState(() => {
@@ -156,6 +199,59 @@ export function useMailbox(accountEmail: string | null) {
     [accountEmail],
   );
 
+  const refreshSmartInboxSummary = useCallback(async () => {
+    if (!accountEmail) {
+      setSmartInboxSummary(null);
+      setSmartInboxGroups([]);
+      setSmartInboxError(null);
+      return;
+    }
+    setSmartInboxLoading(true);
+    setSmartInboxError(null);
+    try {
+      const summary = await invoke<SmartInboxSummary>("get_smart_inbox_summary", {
+        accountEmail,
+      });
+      setSmartInboxSummary(summary);
+      setSmartInboxGroups(summary.groups ?? []);
+    } catch (e) {
+      console.error("Failed to fetch smart inbox summary", e);
+      setSmartInboxError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSmartInboxLoading(false);
+    }
+  }, [accountEmail]);
+
+  const refreshSmartInboxGroups = useCallback(async () => {
+    if (!accountEmail) {
+      setSmartInboxGroups([]);
+      return;
+    }
+    try {
+      const groups = await invoke<SmartInboxGroup[]>("list_smart_inbox_groups", {
+        accountEmail,
+      });
+      setSmartInboxGroups(groups);
+    } catch (e) {
+      console.error("Failed to fetch smart inbox groups", e);
+    }
+  }, [accountEmail]);
+
+  const setSmartInboxOverride = useCallback(
+    async (emailId: string, category: SmartInboxCategory, reason: SmartInboxOverrideReason) => {
+      if (!accountEmail) throw new Error("Missing account context");
+      await invoke("set_smart_inbox_override", {
+        accountEmail,
+        emailId,
+        category,
+        reason,
+      });
+      await refreshSmartInboxSummary();
+      await refreshSmartInboxGroups();
+    },
+    [accountEmail, refreshSmartInboxGroups, refreshSmartInboxSummary],
+  );
+
   const recordSearchMetric = useCallback((durationMs: number) => {
     const next = [...searchMetricsRef.current, durationMs].slice(-20);
     searchMetricsRef.current = next;
@@ -193,13 +289,24 @@ export function useMailbox(accountEmail: string | null) {
     setSearchHistory([]);
     resetSearchMetrics();
     setFolders([]);
+    setSmartInboxSummary(null);
+    setSmartInboxGroups([]);
+    setSmartInboxError(null);
     if (!accountEmail) {
       setFoldersLoading(false);
       setLoadError(null);
       return;
     }
     refreshFolders();
-  }, [accountEmail, refreshFolders, resetSearchMetrics]);
+    refreshSmartInboxSummary();
+    refreshSmartInboxGroups();
+  }, [
+    accountEmail,
+    refreshFolders,
+    refreshSmartInboxGroups,
+    refreshSmartInboxSummary,
+    resetSearchMetrics,
+  ]);
 
   const refreshEmails = useCallback(
     async (options?: { folderId?: string | null }) => {
@@ -237,7 +344,7 @@ export function useMailbox(accountEmail: string | null) {
           });
           const history: SearchHistoryEntry[] = await invoke("get_search_history", { accountEmail });
           if (requestId === searchRequestId.current) {
-            setSearchHistory(history.slice(0, 10));
+            setSearchHistory(history.slice(0, historyLimit));
           }
         } else {
           msgs = await invoke("get_emails", {
@@ -261,7 +368,7 @@ export function useMailbox(accountEmail: string | null) {
         }
       }
     },
-    [accountEmail, debouncedQuery, recordSearchMetric, searchFilters, selectedFolderId],
+    [accountEmail, debouncedQuery, historyLimit, recordSearchMetric, searchFilters, selectedFolderId],
   );
 
   // Fetch emails when folder changes
@@ -277,13 +384,13 @@ export function useMailbox(accountEmail: string | null) {
     const loadHistory = async () => {
       try {
         const history: SearchHistoryEntry[] = await invoke("get_search_history", { accountEmail });
-        setSearchHistory(history.slice(0, 10));
+        setSearchHistory(history.slice(0, historyLimit));
       } catch (e) {
         console.error("Failed to fetch search history", e);
       }
     };
     loadHistory();
-  }, [accountEmail]);
+  }, [accountEmail, historyLimit]);
 
   useEffect(() => {
     const previousFolder = previousFolderRef.current;
@@ -726,6 +833,13 @@ export function useMailbox(accountEmail: string | null) {
     clearSearchHistory,
     refreshFolders,
     refreshEmails,
+    smartInboxSummary,
+    smartInboxGroups,
+    smartInboxLoading,
+    smartInboxError,
+    refreshSmartInboxSummary,
+    refreshSmartInboxGroups,
+    setSmartInboxOverride,
     createFolder,
     renameFolder,
     deleteFolder,

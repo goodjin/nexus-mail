@@ -31,6 +31,15 @@ export type MockConfig = {
   detailFailMessage?: string;
   attachmentDownloadShouldFail?: boolean;
   attachmentDownloadFailMessage?: string;
+  discoveryResult?: {
+    imap_host?: string;
+    imap_port?: number;
+    imap_use_tls?: boolean;
+    smtp_host?: string;
+    smtp_port?: number;
+    smtp_use_tls?: boolean;
+  };
+  discoveryError?: string;
 };
 
 export const applyMockConfig = async (page: Page, config: MockConfig) => {

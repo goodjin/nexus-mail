@@ -75,4 +75,16 @@ test.describe('Folder management verification', () => {
       await expect(page.getByTestId('folder-inbox')).toHaveClass(/bg-nexus-primary/);
     });
   });
+
+  test('FOLD-E2E-06 system folders cannot be renamed or deleted', async ({ page }) => {
+    await test.step('Hover system folder', async () => {
+      await page.goto('/');
+      await page.getByTestId('folder-inbox').hover();
+    });
+    await test.step('Assert no rename/delete actions', async () => {
+      const inbox = page.getByTestId('folder-inbox');
+      await expect(inbox.locator('button[title="Rename folder"]')).toHaveCount(0);
+      await expect(inbox.locator('button[title="Delete folder"]')).toHaveCount(0);
+    });
+  });
 });

@@ -8,6 +8,21 @@ pub struct Database {
     pub pool: SqlitePool,
 }
 
+#[derive(Debug, Clone)]
+pub struct UnifiedInboxRow {
+    pub id: String,
+    pub uid: String,
+    pub account_id: String,
+    pub account_email: String,
+    pub folder_id: String,
+    pub folder_name: String,
+    pub subject: String,
+    pub from: String,
+    pub date: String,
+    pub snippet: String,
+    pub flags_json: String,
+}
+
 const SETTING_AUTO_DOWNLOAD_ATTACHMENTS: &str = "auto_download_attachments";
 const SETTING_BACKGROUND_SYNC_HISTORY: &str = "background_sync_history";
 const SETTING_THEME_MODE: &str = "theme";
@@ -272,6 +287,38 @@ impl Database {
                 query TEXT NOT NULL,
                 last_used_at INTEGER NOT NULL,
                 UNIQUE(account_id, query),
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS smart_inbox_overrides (
+                id TEXT PRIMARY KEY,
+                email_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                category TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at INTEGER NOT NULL,
+                UNIQUE(account_id, email_id),
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(email_id) REFERENCES emails(id)
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS smart_inbox_rules (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                field TEXT NOT NULL,
+                value TEXT NOT NULL,
+                category TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                UNIQUE(account_id, field, value),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             )",
         )
@@ -735,6 +782,159 @@ impl Database {
 
         let rows: Vec<(String,)> = query.fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    pub async fn get_unified_inbox_rows(
+        &self,
+        account_ids: Option<&[String]>,
+        folder_ids: Option<&[String]>,
+        limit: u32,
+    ) -> Result<Vec<UnifiedInboxRow>> {
+        let mut sql = String::from(
+            "SELECT emails.id, emails.remote_id, emails.subject, emails.sender, emails.date, emails.snippet, emails.flags,
+                    folders.id, folders.name, accounts.id, accounts.email
+             FROM emails
+             JOIN folders ON folders.id = emails.folder_id
+             JOIN accounts ON accounts.id = folders.account_id
+             WHERE (folders.system_role = 'INBOX' OR UPPER(folders.remote_id) = 'INBOX')",
+        );
+
+        if let Some(account_ids) = account_ids {
+            if !account_ids.is_empty() {
+                let placeholders = vec!["?"; account_ids.len()].join(", ");
+                sql.push_str(" AND accounts.id IN (");
+                sql.push_str(&placeholders);
+                sql.push(')');
+            }
+        }
+
+        if let Some(folder_ids) = folder_ids {
+            if !folder_ids.is_empty() {
+                let placeholders = vec!["?"; folder_ids.len()].join(", ");
+                sql.push_str(" AND folders.id IN (");
+                sql.push_str(&placeholders);
+                sql.push(')');
+            }
+        }
+
+        sql.push_str(" ORDER BY emails.date DESC, emails.id DESC LIMIT ?");
+
+        let mut query = sqlx::query(&sql);
+        if let Some(account_ids) = account_ids {
+            for account_id in account_ids {
+                query = query.bind(account_id);
+            }
+        }
+        if let Some(folder_ids) = folder_ids {
+            for folder_id in folder_ids {
+                query = query.bind(folder_id);
+            }
+        }
+        query = query.bind(limit as i64);
+
+        let rows = query.fetch_all(&self.pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| UnifiedInboxRow {
+                id: row.get(0),
+                uid: row.get::<Option<String>, _>(1).unwrap_or_default(),
+                subject: row.get::<Option<String>, _>(2).unwrap_or_default(),
+                from: row.get::<Option<String>, _>(3).unwrap_or_default(),
+                date: row.get::<Option<String>, _>(4).unwrap_or_default(),
+                snippet: row.get::<Option<String>, _>(5).unwrap_or_default(),
+                flags_json: row
+                    .get::<Option<String>, _>(6)
+                    .unwrap_or_else(|| "[]".to_string()),
+                folder_id: row.get(7),
+                folder_name: row.get::<Option<String>, _>(8).unwrap_or_default(),
+                account_id: row.get(9),
+                account_email: row.get::<Option<String>, _>(10).unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    pub async fn search_emails_global_with_context(
+        &self,
+        query: &str,
+        account_ids: Option<&[String]>,
+        folder_ids: Option<&[String]>,
+    ) -> Result<Vec<UnifiedInboxRow>> {
+        let fts_query = query
+            .split_whitespace()
+            .map(|word| {
+                let safe_word = word.replace('\'', "''").replace('"', "");
+                format!("\"{}\"*", safe_word)
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        let fts_query = if fts_query.is_empty() {
+            String::from("*")
+        } else {
+            fts_query
+        };
+
+        let mut sql = String::from(
+            "SELECT emails.id, emails.remote_id, emails.subject, emails.sender, emails.date, emails.snippet, emails.flags,
+                    folders.id, folders.name, accounts.id, accounts.email
+             FROM emails_fts
+             JOIN emails ON emails.id = emails_fts.id
+             JOIN folders ON folders.id = emails.folder_id
+             JOIN accounts ON accounts.id = folders.account_id
+             WHERE emails_fts MATCH ?",
+        );
+
+        if let Some(account_ids) = account_ids {
+            if !account_ids.is_empty() {
+                let placeholders = vec!["?"; account_ids.len()].join(", ");
+                sql.push_str(" AND accounts.id IN (");
+                sql.push_str(&placeholders);
+                sql.push(')');
+            }
+        }
+
+        if let Some(folder_ids) = folder_ids {
+            if !folder_ids.is_empty() {
+                let placeholders = vec!["?"; folder_ids.len()].join(", ");
+                sql.push_str(" AND folders.id IN (");
+                sql.push_str(&placeholders);
+                sql.push(')');
+            }
+        }
+
+        sql.push_str(" ORDER BY rank");
+
+        let mut query = sqlx::query(&sql).bind(fts_query);
+        if let Some(account_ids) = account_ids {
+            for account_id in account_ids {
+                query = query.bind(account_id);
+            }
+        }
+        if let Some(folder_ids) = folder_ids {
+            for folder_id in folder_ids {
+                query = query.bind(folder_id);
+            }
+        }
+
+        let rows = query.fetch_all(&self.pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| UnifiedInboxRow {
+                id: row.get(0),
+                uid: row.get::<Option<String>, _>(1).unwrap_or_default(),
+                subject: row.get::<Option<String>, _>(2).unwrap_or_default(),
+                from: row.get::<Option<String>, _>(3).unwrap_or_default(),
+                date: row.get::<Option<String>, _>(4).unwrap_or_default(),
+                snippet: row.get::<Option<String>, _>(5).unwrap_or_default(),
+                flags_json: row
+                    .get::<Option<String>, _>(6)
+                    .unwrap_or_else(|| "[]".to_string()),
+                folder_id: row.get(7),
+                folder_name: row.get::<Option<String>, _>(8).unwrap_or_default(),
+                account_id: row.get(9),
+                account_email: row.get::<Option<String>, _>(10).unwrap_or_default(),
+            })
+            .collect())
     }
 
     pub async fn get_last_uid(&self, folder_id: &str) -> Result<u32> {

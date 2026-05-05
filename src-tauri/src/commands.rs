@@ -1,6 +1,8 @@
 use crate::core::database::Database;
 use crate::core::imap_client::RealImapClient;
 use crate::core::security::SecurityService;
+use crate::core::smart_inbox;
+use crate::core::unified_inbox;
 use crate::core::smtp_client::RealSmtpClient;
 use crate::core::sync_engine::SyncEngine;
 use crate::core::traits::{
@@ -121,6 +123,12 @@ pub struct SearchFilters {
     pub start_date: Option<String>,
     pub end_date: Option<String>,
     pub has_attachments: Option<bool>,
+    pub folder_ids: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+pub struct GlobalSearchFilters {
+    pub account_ids: Option<Vec<String>>,
     pub folder_ids: Option<Vec<String>>,
 }
 
@@ -1442,6 +1450,55 @@ pub async fn search_emails_with_filters(
 }
 
 #[tauri::command]
+pub async fn get_unified_inbox(
+    db: State<'_, Database>,
+    account_ids: Option<Vec<String>>,
+    folder_ids: Option<Vec<String>>,
+) -> Result<Vec<unified_inbox::UnifiedInboxItem>, String> {
+    unified_inbox::get_unified_inbox(
+        &db,
+        account_ids.as_deref(),
+        folder_ids.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn search_emails_global(
+    db: State<'_, Database>,
+    query: String,
+    filters: Option<GlobalSearchFilters>,
+) -> Result<Vec<unified_inbox::GlobalSearchItem>, String> {
+    let account_ids = filters
+        .as_ref()
+        .and_then(|filter| filter.account_ids.as_deref());
+    let folder_ids = filters
+        .as_ref()
+        .and_then(|filter| filter.folder_ids.as_deref());
+    unified_inbox::search_emails_global(&db, &query, account_ids, folder_ids)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn filter_search_results(
+    db: State<'_, Database>,
+    query: String,
+    filters: Option<GlobalSearchFilters>,
+) -> Result<Vec<unified_inbox::GlobalSearchItem>, String> {
+    let account_ids = filters
+        .as_ref()
+        .and_then(|filter| filter.account_ids.as_deref());
+    let folder_ids = filters
+        .as_ref()
+        .and_then(|filter| filter.folder_ids.as_deref());
+    unified_inbox::search_emails_global(&db, &query, account_ids, folder_ids)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_search_history(
     db: State<'_, Database>,
     account_email: String,
@@ -1477,6 +1534,54 @@ pub async fn clear_search_history(
         .ok_or_else(|| "Account not found".to_string())?;
 
     db.clear_search_history(&account.id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_smart_inbox_summary(
+    db: State<'_, Database>,
+    account_email: String,
+) -> Result<smart_inbox::SmartInboxSummary, String> {
+    let account = db
+        .get_account_by_email(&account_email)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())?;
+    smart_inbox::get_smart_inbox_summary(&db, &account.id, &account.email)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_smart_inbox_groups(
+    db: State<'_, Database>,
+    account_email: String,
+) -> Result<Vec<smart_inbox::SmartInboxGroup>, String> {
+    let account = db
+        .get_account_by_email(&account_email)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())?;
+    smart_inbox::list_smart_inbox_groups(&db, &account.id, &account.email)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_smart_inbox_override(
+    db: State<'_, Database>,
+    account_email: String,
+    email_id: String,
+    category: String,
+    reason: String,
+) -> Result<smart_inbox::SmartInboxOverride, String> {
+    let account = db
+        .get_account_by_email(&account_email)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())?;
+    smart_inbox::set_smart_inbox_override(&db, &account.id, &email_id, &category, &reason)
         .await
         .map_err(|e| e.to_string())
 }

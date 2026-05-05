@@ -4,7 +4,7 @@ test.describe('Mail List Enhancements', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('http://localhost:1420');
     await page.waitForSelector('[data-testid^="email-card-"]');
-    await expect(page.locator('h2')).toContainText('Inbox');
+    await expect(page.getByTestId('folder-inbox')).toHaveClass(/bg-nexus-primary/);
   });
 
   test('should show list card metadata', async ({ page }) => {
@@ -16,12 +16,12 @@ test.describe('Mail List Enhancements', () => {
   });
 
   test('should show unread indicator when scrolled to bottom', async ({ page }) => {
-    const scroller = page.locator('[data-virtuoso-scroller="true"]');
+    const scroller = page.getByTestId('email-list-scroll');
     await scroller.evaluate((element) => element.scrollTo(0, element.scrollHeight));
 
-    const unreadCard = page.getByTestId('email-card-1');
+    const unreadCard = page.getByTestId('email-card-1').first();
     await expect(unreadCard).toBeVisible();
-    await expect(unreadCard.locator('div.bg-nexus-accent.rounded-full')).toBeVisible();
+    await expect(page.getByTestId('unread-indicator-1').first()).toBeVisible();
   });
 
   test('should open email and render detail content', async ({ page }) => {
@@ -61,7 +61,9 @@ test.describe('Mail List Enhancements', () => {
   });
 
   test('should fallback to snippet when body is empty', async ({ page }) => {
-    await page.getByTestId('email-card-99').click();
+    const emptyCard = page.getByTestId('email-card-99').first();
+    await emptyCard.scrollIntoViewIfNeeded();
+    await emptyCard.evaluate((node) => (node as HTMLElement).click());
     await expect(page.getByTestId('action-delete')).toBeVisible();
     await expect(page.locator('main')).toContainText('EMPTY BODY - Fallback snippet');
   });

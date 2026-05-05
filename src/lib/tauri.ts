@@ -7,6 +7,8 @@ const MOCK_CONFIG_KEY = "nexus-mail-mock-config";
 const MOCK_SEND_EMAIL_KEY = "nexus-mail-mock-send-email";
 const MOCK_SETTINGS_KEY = "nexus-mail-mock-settings";
 const MOCK_FOLDERS_KEY = "nexus-mail-mock-folders";
+const MOCK_SMART_INBOX_KEY = "nexus-mail-mock-smart-inbox";
+const MOCK_UNIFIED_INBOX_KEY = "nexus-mail-mock-unified-inbox";
 const defaultMockAccounts = [
   {
     id: "demo-id",
@@ -111,6 +113,82 @@ const persistMockFolders = (folders: Record<string, MockFolder[]>) => {
 
 let mockCustomFolders = loadMockFolders();
 
+type SmartInboxCategory = "important" | "personal" | "notifications" | "newsletters" | "low_priority";
+
+type MockSmartInboxItem = {
+  id: string;
+  uid: string;
+  account_id: string;
+  folder_id: string;
+  subject: string;
+  from: string;
+  date: string;
+  flags: string[];
+  category: SmartInboxCategory;
+};
+
+type MockSmartInboxState = {
+  items: MockSmartInboxItem[];
+};
+
+const loadMockSmartInbox = (): Record<string, MockSmartInboxState> => {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const stored = window.localStorage.getItem(MOCK_SMART_INBOX_KEY);
+    if (!stored) return {};
+    const parsed = JSON.parse(stored);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    console.warn("Failed to load mock smart inbox data, using defaults.", error);
+    return {};
+  }
+};
+
+const persistMockSmartInbox = (data: Record<string, MockSmartInboxState>) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(MOCK_SMART_INBOX_KEY, JSON.stringify(data));
+};
+
+let mockSmartInbox = loadMockSmartInbox();
+
+type MockUnifiedInboxItem = {
+  id: string;
+  uid: string;
+  account_id: string;
+  account_email: string;
+  folder_id: string;
+  folder_name: string;
+  subject: string;
+  from: string;
+  date: string;
+  snippet: string;
+  flags: string[];
+};
+
+const loadMockUnifiedInbox = (): MockUnifiedInboxItem[] => {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  try {
+    const stored = window.localStorage.getItem(MOCK_UNIFIED_INBOX_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.warn("Failed to load mock unified inbox data, using defaults.", error);
+    return [];
+  }
+};
+
+const persistMockUnifiedInbox = (items: MockUnifiedInboxItem[]) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(MOCK_UNIFIED_INBOX_KEY, JSON.stringify(items));
+};
+
+let mockUnifiedInbox = loadMockUnifiedInbox();
+
 type MockConfig = {
   syncShouldFail?: boolean;
   syncFailMessage?: string;
@@ -142,6 +220,15 @@ type MockConfig = {
   detailFailMessage?: string;
   attachmentDownloadShouldFail?: boolean;
   attachmentDownloadFailMessage?: string;
+  discoveryResult?: {
+    imap_host?: string;
+    imap_port?: number;
+    imap_use_tls?: boolean;
+    smtp_host?: string;
+    smtp_port?: number;
+    smtp_use_tls?: boolean;
+  };
+  discoveryError?: string;
 };
 
 const readMockConfig = (): MockConfig => {
@@ -190,6 +277,11 @@ const upsertMockAccount = (args: any) => {
   persistMockAccounts(mockAccounts);
 };
 
+const getSearchHistoryLimit = () => {
+  const parsed = Number.parseInt(mockSettings.search_history_limit ?? "10", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
+};
+
 const recordMockSearchHistory = (accountEmail: string, query: string) => {
   const history = mockSearchHistory[accountEmail] ?? [];
   const now = Date.now();
@@ -198,7 +290,7 @@ const recordMockSearchHistory = (accountEmail: string, query: string) => {
     history.splice(existingIndex, 1);
   }
   history.unshift({ query, last_used_at: now });
-  mockSearchHistory[accountEmail] = history.slice(0, 10);
+  mockSearchHistory[accountEmail] = history.slice(0, getSearchHistoryLimit());
 };
 
 const getMockSearchHistory = (accountEmail: string) => {
@@ -233,6 +325,168 @@ const buildMockFolders = (accountEmail: string) => {
     system_role: folder.system_role ?? null,
   }));
   return [...baseFolders, ...customFolders];
+};
+
+const SMART_INBOX_ORDER: SmartInboxCategory[] = [
+  "important",
+  "personal",
+  "notifications",
+  "newsletters",
+  "low_priority",
+];
+
+const buildDefaultSmartInboxItems = (accountEmail: string): MockSmartInboxItem[] => {
+  const baseDate = (offsetMinutes: number) =>
+    new Date(Date.now() - offsetMinutes * 60 * 1000).toISOString();
+  return [
+    {
+      id: `${accountEmail}-smart-1`,
+      uid: "100",
+      account_id: accountEmail,
+      folder_id: `${accountEmail}::inbox`,
+      subject: "Quarterly report review",
+      from: "ceo@demo.com",
+      date: baseDate(30),
+      flags: [],
+      category: "important",
+    },
+    {
+      id: `${accountEmail}-smart-2`,
+      uid: "99",
+      account_id: accountEmail,
+      folder_id: `${accountEmail}::inbox`,
+      subject: "Lunch this week?",
+      from: "friend@demo.com",
+      date: baseDate(60),
+      flags: [],
+      category: "personal",
+    },
+    {
+      id: `${accountEmail}-smart-3`,
+      uid: "98",
+      account_id: accountEmail,
+      folder_id: `${accountEmail}::inbox`,
+      subject: "Security alert",
+      from: "no-reply@alerts.demo.com",
+      date: baseDate(120),
+      flags: ["\\Seen"],
+      category: "notifications",
+    },
+    {
+      id: `${accountEmail}-smart-4`,
+      uid: "97",
+      account_id: accountEmail,
+      folder_id: `${accountEmail}::inbox`,
+      subject: "Nexus Weekly Newsletter",
+      from: "newsletter@demo.com",
+      date: baseDate(180),
+      flags: ["\\Seen"],
+      category: "newsletters",
+    },
+    {
+      id: `${accountEmail}-smart-5`,
+      uid: "96",
+      account_id: accountEmail,
+      folder_id: `${accountEmail}::inbox`,
+      subject: "Low priority notice",
+      from: "updates@demo.com",
+      date: baseDate(240),
+      flags: ["\\Seen"],
+      category: "low_priority",
+    },
+  ];
+};
+
+const resolveSmartInboxItems = (accountEmail: string) => {
+  if (!mockSmartInbox[accountEmail]) {
+    mockSmartInbox = {
+      ...mockSmartInbox,
+      [accountEmail]: { items: buildDefaultSmartInboxItems(accountEmail) },
+    };
+    persistMockSmartInbox(mockSmartInbox);
+  }
+  return mockSmartInbox[accountEmail]?.items ?? [];
+};
+
+const buildDefaultUnifiedInboxItems = (): MockUnifiedInboxItem[] => {
+  const baseDate = (offsetMinutes: number) =>
+    new Date(Date.now() - offsetMinutes * 60 * 1000).toISOString();
+  return mockAccounts.flatMap((account, index) => {
+    const folderId = `${account.email}::inbox`;
+    const folderName = "Inbox";
+    const domain = account.email.split("@")[1] ?? "mock.com";
+    return [
+      {
+        id: `${account.id}-unified-1`,
+        uid: "200",
+        account_id: account.id,
+        account_email: account.email,
+        folder_id: folderId,
+        folder_name: folderName,
+        subject: `Unified ${account.email} update`,
+        from: `updates@${domain}`,
+        date: baseDate(15 + index * 5),
+        snippet: "Unified inbox sample message",
+        flags: [],
+      },
+      {
+        id: `${account.id}-unified-2`,
+        uid: "199",
+        account_id: account.id,
+        account_email: account.email,
+        folder_id: folderId,
+        folder_name: folderName,
+        subject: `Meeting notes for ${account.display_name ?? account.email}`,
+        from: `team@${domain}`,
+        date: baseDate(45 + index * 7),
+        snippet: "Notes from the latest meeting are ready.",
+        flags: ["\\Seen"],
+      },
+    ];
+  });
+};
+
+const resolveUnifiedInboxItems = (accountIds?: string[]) => {
+  if (mockUnifiedInbox.length === 0) {
+    mockUnifiedInbox = buildDefaultUnifiedInboxItems();
+    persistMockUnifiedInbox(mockUnifiedInbox);
+  }
+  let items = mockUnifiedInbox;
+  if (accountIds && accountIds.length > 0) {
+    const ids = new Set(accountIds);
+    items = items.filter((item) => ids.has(item.account_id));
+  }
+  return items;
+};
+
+const toTimestamp = (date: string) => {
+  const parsed = new Date(date);
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+};
+
+const buildSmartInboxGroups = (items: MockSmartInboxItem[]) => {
+  const stats: Record<string, { unread: number; latest: string; latestTs: number }> = {};
+  SMART_INBOX_ORDER.forEach((label) => {
+    stats[label] = { unread: 0, latest: "", latestTs: 0 };
+  });
+  items.forEach((item) => {
+    const entry = stats[item.category] ?? { unread: 0, latest: "", latestTs: 0 };
+    if (!item.flags?.includes("\\Seen")) {
+      entry.unread += 1;
+    }
+    const ts = toTimestamp(item.date);
+    if (ts >= entry.latestTs) {
+      entry.latest = item.date;
+      entry.latestTs = ts;
+    }
+    stats[item.category] = entry;
+  });
+  return SMART_INBOX_ORDER.map((label) => ({
+    id: label,
+    label,
+    unread_count: stats[label]?.unread ?? 0,
+    latest_at: stats[label]?.latest ?? "",
+  }));
 };
 
 const parseFolderId = (folderId?: string) => {
@@ -405,6 +659,43 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
           .filter(e => e.subject.toLowerCase().includes(query) || e.snippet.toLowerCase().includes(query))
           .filter(e => !filters.sender || e.from.toLowerCase().includes(filters.sender.toLowerCase()))
           .filter(e => !filters.has_attachments || (e.attachments && e.attachments.length > 0)) as any;
+      case "get_unified_inbox": {
+        const accountIds = args?.account_ids as string[] | undefined;
+        const folderIds = args?.folder_ids as string[] | undefined;
+        let items = resolveUnifiedInboxItems(accountIds);
+        if (folderIds && folderIds.length > 0) {
+          const folderSet = new Set(folderIds);
+          items = items.filter((item) => folderSet.has(item.folder_id));
+        }
+        return items as any;
+      }
+      case "search_emails_global":
+      case "filter_search_results": {
+        if (config.offline) {
+          throw new Error("Offline: search unavailable");
+        }
+        if (config.searchShouldFail) {
+          throw new Error(config.searchFailMessage ?? "Mock search failed");
+        }
+        if (config.searchDelayMs) {
+          await new Promise(r => setTimeout(r, config.searchDelayMs));
+        }
+        const query = String(args?.query ?? "").toLowerCase();
+        const filters = args?.filters ?? {};
+        const accountIds = filters.account_ids as string[] | undefined;
+        const folderIds = filters.folder_ids as string[] | undefined;
+        let items = resolveUnifiedInboxItems(accountIds);
+        if (folderIds && folderIds.length > 0) {
+          const folderSet = new Set(folderIds);
+          items = items.filter((item) => folderSet.has(item.folder_id));
+        }
+        if (query.includes("nomatch")) {
+          return [] as any;
+        }
+        return items.filter((item) =>
+          item.subject.toLowerCase().includes(query) || item.snippet.toLowerCase().includes(query)
+        ) as any;
+      }
       case "get_search_history":
         return getMockSearchHistory(args.accountEmail ?? mockAccounts[0]?.email ?? "demo@nexus-mail.com") as any;
       case "clear_search_history":
@@ -432,6 +723,39 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
         }) as any;
       case "get_folders":
         return buildMockFolders(args?.accountEmail ?? mockAccounts[0]?.email ?? "demo@nexus-mail.com") as any;
+      case "get_smart_inbox_summary": {
+        const accountEmail = args?.accountEmail ?? mockAccounts[0]?.email ?? "demo@nexus-mail.com";
+        const items = resolveSmartInboxItems(accountEmail);
+        const groups = buildSmartInboxGroups(items);
+        const priority_items = items.filter((item) =>
+          ["important", "personal"].includes(item.category)
+        );
+        return { groups, priority_items } as any;
+      }
+      case "list_smart_inbox_groups": {
+        const accountEmail = args?.accountEmail ?? mockAccounts[0]?.email ?? "demo@nexus-mail.com";
+        const items = resolveSmartInboxItems(accountEmail);
+        return buildSmartInboxGroups(items) as any;
+      }
+      case "set_smart_inbox_override": {
+        const accountEmail = args?.accountEmail ?? mockAccounts[0]?.email ?? "demo@nexus-mail.com";
+        const emailId = String(args?.emailId ?? "");
+        const category = String(args?.category ?? "important");
+        const items = resolveSmartInboxItems(accountEmail);
+        const updated = items.map((item) =>
+          item.id === emailId ? { ...item, category } : item
+        );
+        mockSmartInbox = { ...mockSmartInbox, [accountEmail]: { items: updated } };
+        persistMockSmartInbox(mockSmartInbox);
+        return {
+          id: `override-${Date.now()}`,
+          email_id: emailId,
+          account_id: accountEmail,
+          category,
+          reason: String(args?.reason ?? "user_mark_important"),
+          created_at: new Date().toISOString(),
+        } as any;
+      }
       case "create_folder": {
         const accountEmail = args?.accountEmail ?? mockAccounts[0]?.email ?? "demo@nexus-mail.com";
         const name = String(args?.name ?? "").trim();
@@ -720,6 +1044,8 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
         persistMockSettings(mockSettings);
         mockCustomFolders = {};
         persistMockFolders(mockCustomFolders);
+        mockSmartInbox = {};
+        persistMockSmartInbox(mockSmartInbox);
         return {} as any;
       case "test_account_connection":
         await new Promise(r => setTimeout(r, 1500));
@@ -733,6 +1059,14 @@ export async function invoke<T>(cmd: string, args?: any): Promise<T> {
           throw "SMTP Connection Failed: Mock SMTP connection failed";
         }
         return {} as any;
+      case "discover_account_settings":
+        if (config.discoveryError) {
+          throw new Error(config.discoveryError);
+        }
+        if (config.discoveryResult) {
+          return config.discoveryResult as any;
+        }
+        return null as any;
       default:
         return [] as any;
     }
